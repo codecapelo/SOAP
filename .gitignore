@@ -1,0 +1,12 @@
+# macOS artifacts
+.DS_Store
+
+# VS Code settings
+.vscode/
+
+# Node build artifacts
+meu-soap/node_modules/
+meu-soap/dist/
+
+# Logs
+*.log
