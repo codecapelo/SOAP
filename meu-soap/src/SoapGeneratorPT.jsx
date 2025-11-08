@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 
 const CONDITIONS = [
   { key: "IVAS", label: "IVAS - Infeccao de vias aereas superiores" },
-  { key: "FARINGO", label: "Faringoamigdalite aguda" },
+  { key: "FARINGO", label: "Faringoamigdalite bacteriana" },
   { key: "GECA", label: "GECA - Gastroenterite aguda" },
   { key: "ITU", label: "ITU baixa nao complicada" },
   { key: "DOR_LOMBAR", label: "Dor lombar mecanica" },
@@ -62,6 +62,11 @@ const SYMPTOM_OPTIONS = {
     { key: "odinofagia", label: "Odinofagia" },
     { key: "tosse", label: "Tosse" },
     { key: "febre", label: "Febre" },
+    { key: "mialgia", label: "Mialgia" },
+    { key: "coriza", label: "Coriza" },
+    { key: "otalgia", label: "Otalgia" },
+    { key: "diarreia", label: "Diarreia" },
+    { key: "cefaleia", label: "Cefaleia" },
   ],
   FARINGO: [
     { key: "odinofagia", label: "Odinofagia" },
@@ -79,6 +84,7 @@ const SYMPTOM_OPTIONS = {
     { key: "disuria", label: "Disuria" },
     { key: "polaciuria", label: "Polaciúria" },
     { key: "urgencia", label: "Urgencia miccional" },
+    { key: "dor_baixo_ventre", label: "Dor em baixo ventre" },
   ],
   DOR_LOMBAR: [
     { key: "dor_lombar", label: "Dor lombar" },
@@ -87,6 +93,7 @@ const SYMPTOM_OPTIONS = {
   ENXAQUECA: [
     { key: "cefaleia", label: "Cefaleia pulsatil" },
     { key: "fonofobia", label: "Fonofobia" },
+    { key: "fotofobia", label: "Fotofobia" },
     { key: "nauseas", label: "Nauseas" },
     { key: "vomitos", label: "Vomitos" },
     { key: "aura", label: "Aura visual" },
@@ -136,6 +143,7 @@ const ALERT_OPTIONS = {
     { key: "deficit_motor", label: "Deficit motor" },
     { key: "trauma_importante", label: "Trauma importante" },
     { key: "parestesia", label: "Parestesias persistentes" },
+    { key: "febre_associada", label: "Febre associada" },
   ],
   ENXAQUECA: [
     { key: "cefaleia_trovoada", label: "Cefaleia trovoada" },
@@ -158,10 +166,18 @@ const ALERT_OPTIONS = {
 
 const buildSymptomState = (cond) => {
   const options = SYMPTOM_OPTIONS[cond] ?? [];
-  return options.reduce((acc, item) => {
+  const base = options.reduce((acc, item) => {
     acc[item.key] = "present";
     return acc;
   }, {});
+  if (cond === "IVAS") {
+    ["diarreia", "otalgia", "cefaleia"].forEach((key) => {
+      if (base[key]) {
+        base[key] = "absent";
+      }
+    });
+  }
+  return base;
 };
 
 const buildAlertState = (cond) => {
@@ -179,6 +195,8 @@ const buildDefaultParams = () => {
     cond,
     duracaoDias: "3",
     telemed: true,
+    isChild: false,
+    pesoInfantil: "",
     semAlergias: true,
     alergiasTexto: "",
     semComorb: true,
@@ -197,6 +215,7 @@ const buildDefaultParams = () => {
     alertStates: buildAlertState(cond),
     administrativoTipo: ADMIN_OPTIONS[0].key,
     conjEye: "ambos",
+    enxaquecaLateralidade: "unilateral",
     adminMedicacao: "",
     adminRenova: true,
   };
@@ -239,6 +258,25 @@ const formatComorbidities = (p) => {
     return `COMORBIDADES: ${p.comorbTexto.trim().toUpperCase()}.`;
   }
   return "COMORBIDADES INFORMADAS PELO PACIENTE.";
+};
+
+const formatChildWeight = (p) => {
+  if (!p.isChild) {
+    return "";
+  }
+  const raw = `${p.pesoInfantil ?? ""}`.trim();
+  if (!raw) {
+    return "";
+  }
+  const normalized = raw.replace(",", ".");
+  const parsed = parseFloat(normalized);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    const display = Number.isInteger(parsed)
+      ? parsed.toFixed(0)
+      : parsed.toFixed(1);
+    return `PESO REFERIDO: ${display.replace(".", ",")} KG.`;
+  }
+  return `PESO REFERIDO: ${raw.toUpperCase()} KG.`;
 };
 
 const formatAtestado = (p) => {
@@ -372,7 +410,10 @@ const buildSubjective = (p, common, detailLines = []) => {
 const buildObjective = (p, common, extraLines = []) => {
   const baseline =
     "PACIENTE EM BOM ESTADO GERAL, FALA COM CLAREZA, HIDRATADO, AFEBRIL NO MOMENTO (REFERIDO PELO PACIENTE), SEM SINAIS DE DESCONFORTO RESPIRATORIO OU ALTERACAO NEUROLOGICA APARENTE.";
-  return [common.telemed, baseline, ...extraLines].filter(Boolean).join(" \n");
+  const childWeightLine = formatChildWeight(p);
+  return [common.telemed, baseline, childWeightLine, ...extraLines]
+    .filter(Boolean)
+    .join(" \n");
 };
 
 const normalizePlanText = (value, fallback) =>
@@ -441,17 +482,18 @@ const TEMPLATES = {
     const common = baseCommon(p);
     const detail = common.hasAlert
       ? null
-      : "REFERE ODINOFAGIA INTENSA, SEM DISFAGIA PROGRESSIVA OU TRISMO.";
+      : "REFERE ODINOFAGIA INTENSA COM PLACAS TONSILARES, SEM DISFAGIA PROGRESSIVA OU TRISMO.";
     const S = buildSubjective(p, common, [detail]);
     const O = buildObjective(p, common, [
       "SEM DISFAGIA IMPORTANTE OU TRISMO REFERIDOS DURANTE A CONSULTA.",
     ]);
     const A = appendAlertToAssessment(
-      "FARINGOAMIGDALITE AGUDA, PROVAVEL ORIGEM VIRAL.",
+      "FARINGOAMIGDALITE BACTERIANA (CRITERIOS CLINICOS).",
       common
     );
     const P = buildPlan(p, common, [
       "RECOMENDADO REPOUSO VOCAL, HIDRATACAO MORNA E HIGIENE OROFARINGEA.",
+      "ATB."
     ]);
     return composeSoap({ S, O, A, P });
   },
@@ -477,7 +519,7 @@ const TEMPLATES = {
     const common = baseCommon(p);
     const detail = common.hasAlert
       ? null
-      : "RELATA DISURIA E POLACIURIA, MANTENDO ESTADO GERAL ESTAVEL.";
+      : "QUADRO COMPATIVEL COM CISTITE BAIXA, SEM FEBRE OU DOR EM FLANCOS REFERIDOS.";
     const S = buildSubjective(p, common, [detail]);
     const O = buildObjective(p, common, [
       "SEM INDICIOS DE PIELONEFRITE OU ALTERACOES SISTEMICAS REFERIDOS.",
@@ -511,7 +553,14 @@ const TEMPLATES = {
     const detail = common.hasAlert
       ? null
       : "RELATA CEFALEIA PULSATIL HABITUAL, SEM NOVOS FATORES DE ALERTA.";
-    const S = buildSubjective(p, common, [detail]);
+    const lateralityMap = {
+      unilateral: "CEFALEIA PREDOMINANTEMENTE UNILATERAL HABITUAL.",
+      bilateral: "CEFALEIA QUE ENVOLVE AMBOS OS HEMICRANIOS HABITUALMENTE.",
+    };
+    const lateralityLine = common.hasAlert
+      ? null
+      : lateralityMap[p.enxaquecaLateralidade] ?? null;
+    const S = buildSubjective(p, common, [detail, lateralityLine]);
     const O = buildObjective(p, common, [
       "EXAME NEUROLOGICO REMOTO SEM ALTERACOES AGUDAS REFERIDAS.",
     ]);
@@ -543,7 +592,7 @@ const TEMPLATES = {
     const common = baseCommon(p);
     const detail = common.hasAlert
       ? null
-      : "INICIO SUBITO APOS EXPOSICAO VIRAL DOMICILIAR, SEM COMPROMETIMENTO VISUAL IMPORTANTE.";
+      : "QUADRO AGUDO COM PRURIDO E SECRECAO SEROSA, SEM COMPROMETIMENTO VISUAL IMPORTANTE.";
     const eyeMap = {
       esquerdo: "OLHO ESQUERDO ACOMETIDO SEGUNDO O PACIENTE.",
       direito: "OLHO DIREITO ACOMETIDO SEGUNDO O PACIENTE.",
@@ -618,6 +667,15 @@ const templateParams = (overrides = {}) => {
   }
   if (!merged.conjEye) {
     merged.conjEye = "ambos";
+  }
+  if (!merged.enxaquecaLateralidade) {
+    merged.enxaquecaLateralidade = "unilateral";
+  }
+  if (merged.isChild === undefined) {
+    merged.isChild = false;
+  }
+  if (merged.pesoInfantil === undefined) {
+    merged.pesoInfantil = "";
   }
   if (merged.cond === "CONJUNTIVITE") {
     if (merged.includeAntibiotico === undefined) {
@@ -778,6 +836,13 @@ export default function SoapGeneratorPT() {
     setParams((prev) => {
       const wasConj = prev.cond === "CONJUNTIVITE";
       const isConj = value === "CONJUNTIVITE";
+      const isEnxaqueca = value === "ENXAQUECA";
+      const nextAtestadoDias =
+        value === "ADMIN"
+          ? "0"
+          : prev.cond === "ADMIN" && prev.atestadoDias === "0"
+          ? "1"
+          : prev.atestadoDias;
       const shouldResetAntibiotic =
         wasConj && prev.antibioticoTexto === CONJ_DEFAULT_ANTIBIOTIC;
       const nextAntibioticoTexto = isConj
@@ -804,6 +869,10 @@ export default function SoapGeneratorPT() {
         antibioticoTexto: nextAntibioticoTexto,
         includeAntibiotico: nextIncludeAntibiotico,
         conjEye: isConj ? prev.conjEye || "ambos" : prev.conjEye || "ambos",
+        enxaquecaLateralidade: isEnxaqueca
+          ? prev.enxaquecaLateralidade || "unilateral"
+          : prev.enxaquecaLateralidade,
+        atestadoDias: nextAtestadoDias,
       };
     });
   };
@@ -813,6 +882,9 @@ export default function SoapGeneratorPT() {
     administrativoTipo:
       params.administrativoTipo || ADMIN_OPTIONS[0].key,
     conjEye: params.conjEye || "ambos",
+    enxaquecaLateralidade: params.enxaquecaLateralidade || "unilateral",
+    isChild: !!params.isChild,
+    pesoInfantil: params.pesoInfantil ?? "",
     adminMedicacao: params.adminMedicacao ?? "",
     adminRenova: params.adminRenova ?? true,
     symptomStates: {
@@ -954,6 +1026,29 @@ export default function SoapGeneratorPT() {
                 </div>
               </div>
 
+              <div className="field">
+                <label>Paciente pediatrico</label>
+                <div className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    id="isChild"
+                    checked={!!params.isChild}
+                    onChange={() => handleCheckbox("isChild")}
+                  />
+                  <label htmlFor="isChild">Marcar se crianca</label>
+                </div>
+                {params.isChild && (
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    placeholder="Peso em kg"
+                    value={params.pesoInfantil}
+                    onChange={(event) => handleChange("pesoInfantil", event.target.value)}
+                  />
+                )}
+              </div>
+
               {params.cond === "CONJUNTIVITE" && (
                 <div className="field">
                   <label>Olho acometido</label>
@@ -964,6 +1059,21 @@ export default function SoapGeneratorPT() {
                     <option value="esquerdo">Esquerdo</option>
                     <option value="direito">Direito</option>
                     <option value="ambos">Ambos</option>
+                  </select>
+                </div>
+              )}
+
+              {params.cond === "ENXAQUECA" && (
+                <div className="field">
+                  <label>Lateralidade da cefaleia</label>
+                  <select
+                    value={params.enxaquecaLateralidade}
+                    onChange={(event) =>
+                      handleChange("enxaquecaLateralidade", event.target.value)
+                    }
+                  >
+                    <option value="unilateral">Unilateral</option>
+                    <option value="bilateral">Bilateral</option>
                   </select>
                 </div>
               )}
