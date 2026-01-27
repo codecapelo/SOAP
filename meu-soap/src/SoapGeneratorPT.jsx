@@ -196,7 +196,10 @@ const buildDefaultParams = () => {
     duracaoDias: "3",
     telemed: true,
     isChild: false,
+    isPregnant: false,
+    gestacaoSemanas: "",
     pesoInfantil: "",
+    acompanhanteInfantil: "mae",
     semAlergias: true,
     alergiasTexto: "",
     semComorb: true,
@@ -277,6 +280,45 @@ const formatChildWeight = (p) => {
     return `PESO REFERIDO: ${display.replace(".", ",")} KG.`;
   }
   return `PESO REFERIDO: ${raw.toUpperCase()} KG.`;
+};
+
+const formatChildCompanion = (p) => {
+  if (!p.isChild) {
+    return "";
+  }
+  const companion = `${p.acompanhanteInfantil ?? ""}`.trim().toLowerCase();
+  if (!companion) {
+    return "";
+  }
+  if (companion === "mae") {
+    return "PACIENTE ACOMPANHADO PELA MAE.";
+  }
+  if (companion === "pai") {
+    return "PACIENTE ACOMPANHADO PELO PAI.";
+  }
+  if (companion === "ambos") {
+    return "PACIENTE ACOMPANHADO PELA MAE E PELO PAI.";
+  }
+  return "";
+};
+
+const formatPregnancy = (p) => {
+  if (!p.isPregnant) {
+    return "";
+  }
+  const raw = `${p.gestacaoSemanas ?? ""}`.trim();
+  if (!raw) {
+    return "PACIENTE GESTANTE.";
+  }
+  const normalized = raw.replace(",", ".");
+  const parsed = parseFloat(normalized);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    const display = Number.isInteger(parsed)
+      ? parsed.toFixed(0)
+      : parsed.toFixed(1);
+    return `PACIENTE GESTANTE COM ${display.replace(".", ",")} SEMANAS.`;
+  }
+  return `PACIENTE GESTANTE COM ${raw.toUpperCase()} SEMANAS.`;
 };
 
 const formatAtestado = (p) => {
@@ -389,9 +431,37 @@ const appendAlertToAssessment = (baseText, common) =>
 const buildSubjective = (p, common, detailLines = []) => {
   const symptoms = formatSymptoms(p);
   const lines = [];
+  const companionLine = formatChildCompanion(p);
+  const pregnancyLine = formatPregnancy(p);
+  const stripPeriod = (value) => value.replace(/\.$/, "");
+  const stripPaciente = (value) => value.replace(/^PACIENTE\s+/i, "");
+  const introParts = [];
+
+  if (pregnancyLine) {
+    introParts.push(stripPeriod(pregnancyLine));
+  }
+  if (companionLine) {
+    introParts.push(stripPeriod(companionLine));
+  }
+
+  let intro = "";
+  if (introParts.length === 2) {
+    intro = `${introParts[0]} E ${stripPaciente(introParts[1])}`;
+  } else if (introParts.length === 1) {
+    intro = introParts[0];
+  }
 
   if (symptoms.positivesLine) {
-    lines.push(`${common.duration}, ${symptoms.positivesLine}`);
+    const positivesBody = symptoms.positivesLine
+      .replace(/^RELATA\s+/i, "")
+      .replace(/\.$/, "");
+    if (intro) {
+      lines.push(`${intro}, QUE RELATA ${common.duration}, ${positivesBody}.`);
+    } else {
+      lines.push(`${common.duration}, ${symptoms.positivesLine}`);
+    }
+  } else if (intro) {
+    lines.push(`${intro}, QUE RELATA ${common.duration}.`);
   } else {
     lines.push(`${common.duration}.`);
   }
@@ -449,12 +519,14 @@ const buildPlan = (p, common, extraLines = []) => {
     );
   }
 
-  lines.push(
-    normalizePlanText(
-      p.orientacoesTexto,
-      "ORIENTADO A PROCURAR PRONTO SOCORRO PRESENCIAL IMEDIATAMENTE SE SINAIS DE ALERTA OU PIORA CLINICA."
-    )
-  );
+  if (p.telemed) {
+    lines.push(
+      normalizePlanText(
+        p.orientacoesTexto,
+        "ORIENTADO A PROCURAR PRONTO SOCORRO PRESENCIAL IMEDIATAMENTE SE SINAIS DE ALERTA OU PIORA CLINICA."
+      )
+    );
+  }
 
   lines.push(adjustedAtestado, common.cid, common.observacoes);
 
@@ -674,8 +746,17 @@ const templateParams = (overrides = {}) => {
   if (merged.isChild === undefined) {
     merged.isChild = false;
   }
+  if (merged.isPregnant === undefined) {
+    merged.isPregnant = false;
+  }
+  if (merged.gestacaoSemanas === undefined) {
+    merged.gestacaoSemanas = "";
+  }
   if (merged.pesoInfantil === undefined) {
     merged.pesoInfantil = "";
+  }
+  if (!merged.acompanhanteInfantil) {
+    merged.acompanhanteInfantil = "mae";
   }
   if (merged.cond === "CONJUNTIVITE") {
     if (merged.includeAntibiotico === undefined) {
@@ -884,7 +965,10 @@ export default function SoapGeneratorPT() {
     conjEye: params.conjEye || "ambos",
     enxaquecaLateralidade: params.enxaquecaLateralidade || "unilateral",
     isChild: !!params.isChild,
+    isPregnant: !!params.isPregnant,
+    gestacaoSemanas: params.gestacaoSemanas ?? "",
     pesoInfantil: params.pesoInfantil ?? "",
+    acompanhanteInfantil: params.acompanhanteInfantil || "mae",
     adminMedicacao: params.adminMedicacao ?? "",
     adminRenova: params.adminRenova ?? true,
     symptomStates: {
@@ -982,6 +1066,17 @@ export default function SoapGeneratorPT() {
           <p style={{ marginTop: "8px", fontWeight: 600 }}>
             Elaborado por Raul Lima Capelo
           </p>
+          <div className="checkbox-row" style={{ marginTop: "8px" }}>
+            <input
+              type="checkbox"
+              id="presencialHeader"
+              checked={!params.telemed}
+              onChange={() => handleCheckbox("telemed")}
+            />
+            <label htmlFor="presencialHeader">
+              Versao presencial (sem telemedicina)
+            </label>
+          </div>
         </div>
       </header>
 
@@ -1027,6 +1122,31 @@ export default function SoapGeneratorPT() {
               </div>
 
               <div className="field">
+                <label>Gestacao</label>
+                <div className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    id="isPregnant"
+                    checked={!!params.isPregnant}
+                    onChange={() => handleCheckbox("isPregnant")}
+                  />
+                  <label htmlFor="isPregnant">Marcar se gestante</label>
+                </div>
+                {params.isPregnant && (
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.1"
+                    placeholder="Semanas de gestacao"
+                    value={params.gestacaoSemanas}
+                    onChange={(event) =>
+                      handleChange("gestacaoSemanas", event.target.value)
+                    }
+                  />
+                )}
+              </div>
+
+              <div className="field">
                 <label>Paciente pediatrico</label>
                 <div className="checkbox-row">
                   <input
@@ -1038,14 +1158,28 @@ export default function SoapGeneratorPT() {
                   <label htmlFor="isChild">Marcar se crianca</label>
                 </div>
                 {params.isChild && (
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    placeholder="Peso em kg"
-                    value={params.pesoInfantil}
-                    onChange={(event) => handleChange("pesoInfantil", event.target.value)}
-                  />
+                  <>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      placeholder="Peso em kg"
+                      value={params.pesoInfantil}
+                      onChange={(event) => handleChange("pesoInfantil", event.target.value)}
+                    />
+                    <label htmlFor="childCompanion">Acompanhante</label>
+                    <select
+                      id="childCompanion"
+                      value={params.acompanhanteInfantil}
+                      onChange={(event) =>
+                        handleChange("acompanhanteInfantil", event.target.value)
+                      }
+                    >
+                      <option value="mae">Mae</option>
+                      <option value="pai">Pai</option>
+                      <option value="ambos">Ambos</option>
+                    </select>
+                  </>
                 )}
               </div>
 
