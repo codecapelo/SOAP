@@ -1360,6 +1360,12 @@ export default function SoapGeneratorPT() {
   const [summaryTelemed, setSummaryTelemed] = useState(true);
   const [summaryError, setSummaryError] = useState("");
   const [summaryPreview, setSummaryPreview] = useState(null);
+  const [aiMotivo, setAiMotivo] = useState("");
+  const [aiHistorico, setAiHistorico] = useState("");
+  const [aiIdade, setAiIdade] = useState("");
+  const [aiSexo, setAiSexo] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
 
   const cidOptions = useMemo(
     () => CID_OPTIONS[params.cond] ?? [],
@@ -1498,6 +1504,58 @@ export default function SoapGeneratorPT() {
     setOutput(text);
   };
 
+  const handleGenerateWithAi = async () => {
+    if (!aiMotivo.trim()) {
+      setAiError("Cole o motivo da consulta para gerar com IA.");
+      return;
+    }
+    setAiLoading(true);
+    setAiError("");
+    try {
+      const resp = await fetch("/.netlify/functions/ai-summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          motivo: aiMotivo,
+          historico: aiHistorico,
+          idade: aiIdade,
+          sexo: aiSexo,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setAiError(data?.error || `Falha (${resp.status})`);
+        return;
+      }
+      const summary = data?.summary;
+      if (!summary) {
+        setAiError("Resposta sem summary.");
+        return;
+      }
+      const json = JSON.stringify(summary, null, 2);
+      setSummaryText(json);
+      const sections = parseAiSummary(json);
+      const base = buildDefaultParams();
+      base.telemed = summaryTelemed;
+      base.atestadoDias = summaryAtestadoDias?.toString() || "1";
+      const mapped = mapSummaryToParams(sections, base);
+      const template = TEMPLATES[mapped.cond];
+      if (!template) {
+        setAiError("Condicao identificada nao suportada.");
+        return;
+      }
+      setSummaryPreview(sections);
+      setSummaryError("");
+      setParams(mapped);
+      setOutput(template(mapped));
+      setMode("summary");
+    } catch (err) {
+      setAiError(`Erro de rede: ${err?.message || err}`);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const handleGenerateFromSummary = () => {
     if (!summaryText.trim()) {
       setSummaryError("Cole o resumo da IA para gerar o SOAP.");
@@ -1608,7 +1666,136 @@ export default function SoapGeneratorPT() {
               >
                 Resumo IA
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === "ai"}
+                className={`mode-tab ${mode === "ai" ? "active" : ""}`}
+                onClick={() => setMode("ai")}
+              >
+                Gerar com IA
+              </button>
             </div>
+
+            {mode === "ai" && (
+              <>
+                <div className="form-grid">
+                  <div className="field field-wide">
+                    <label htmlFor="aiMotivo">Motivo da consulta (texto livre)</label>
+                    <textarea
+                      id="aiMotivo"
+                      placeholder="Ex.: estou gripada ha 2 dias, com tosse, febre e dor de cabeca"
+                      value={aiMotivo}
+                      onChange={(event) => setAiMotivo(event.target.value)}
+                      style={{ minHeight: 120 }}
+                    />
+                  </div>
+
+                  <div className="field field-wide">
+                    <label htmlFor="aiHistorico">Historico medico (opcional)</label>
+                    <textarea
+                      id="aiHistorico"
+                      placeholder="Ex.: diabetes, hipertensao"
+                      value={aiHistorico}
+                      onChange={(event) => setAiHistorico(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="field">
+                    <label htmlFor="aiIdade">Idade (opcional)</label>
+                    <input
+                      id="aiIdade"
+                      type="number"
+                      min="0"
+                      value={aiIdade}
+                      onChange={(event) => setAiIdade(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="field">
+                    <label htmlFor="aiSexo">Sexo (opcional)</label>
+                    <select
+                      id="aiSexo"
+                      value={aiSexo}
+                      onChange={(event) => setAiSexo(event.target.value)}
+                    >
+                      <option value="">Nao informado</option>
+                      <option value="feminino">Feminino</option>
+                      <option value="masculino">Masculino</option>
+                    </select>
+                  </div>
+
+                  <div className="field">
+                    <label htmlFor="aiAtestado">Atestado (dias)</label>
+                    <input
+                      id="aiAtestado"
+                      type="number"
+                      min="0"
+                      value={summaryAtestadoDias}
+                      onChange={(event) => setSummaryAtestadoDias(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="field">
+                    <label>Atendimento</label>
+                    <div className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        id="aiTelemed"
+                        checked={summaryTelemed}
+                        onChange={() => setSummaryTelemed((prev) => !prev)}
+                      />
+                      <label htmlFor="aiTelemed">Via telemedicina</label>
+                    </div>
+                  </div>
+
+                  {aiError && (
+                    <div className="field field-wide">
+                      <small style={{ color: "#b91c1c", fontWeight: 600 }}>
+                        {aiError}
+                      </small>
+                    </div>
+                  )}
+
+                  <div className="field field-wide">
+                    <small>
+                      Chama OpenAI gpt-4o-mini via Netlify Function. Voce precisa
+                      configurar a variavel <code>OPENAI_API_KEY</code> no painel
+                      do Netlify (Site settings - Environment variables). Em
+                      desenvolvimento local, use <code>netlify dev</code> com a
+                      mesma variavel.
+                    </small>
+                  </div>
+                </div>
+
+                <div className="actions">
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={handleGenerateWithAi}
+                    disabled={aiLoading}
+                  >
+                    {aiLoading ? "Gerando..." : "Gerar com IA"}
+                  </button>
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={handleCopy}
+                    disabled={!output}
+                  >
+                    {copyState}
+                  </button>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleDownload}
+                    disabled={!output}
+                  >
+                    Baixar .txt
+                  </button>
+                </div>
+              </>
+            )}
 
             {mode === "summary" && (
               <div className="form-grid">
