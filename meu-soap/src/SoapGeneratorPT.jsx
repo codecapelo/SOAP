@@ -533,6 +533,385 @@ const buildPlan = (p, common, extraLines = []) => {
   return lines.filter(Boolean).join(" \n");
 };
 
+const stripAccents = (value) =>
+  (value ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
+
+const CID_TO_COND = {
+  J00: "IVAS",
+  J06: "IVAS",
+  J02: "FARINGO",
+  J03: "FARINGO",
+  A09: "GECA",
+  K52: "GECA",
+  N30: "ITU",
+  N39: "ITU",
+  M54: "DOR_LOMBAR",
+  G43: "ENXAQUECA",
+  J01: "SINUSITE",
+  B30: "CONJUNTIVITE",
+  H10: "CONJUNTIVITE",
+};
+
+const SYMPTOM_SYNONYMS = {
+  cefaleia: ["dor de cabeca", "dor cabeca", "cefaleia"],
+  congestao: ["congestao nasal", "nariz entupido", "congestao"],
+  odinofagia: ["dor de garganta", "dor na garganta", "odinofagia"],
+  mialgia: ["dor muscular", "dores musculares", "mialgia"],
+  otalgia: ["dor de ouvido", "dor no ouvido", "otalgia"],
+  nauseas: ["nausea", "enjoo"],
+  vomitos: ["vomito"],
+  rinorreia_purulenta: ["rinorreia", "secrecao nasal"],
+  dor_face: ["dor facial", "pressao facial", "dor na face"],
+  hiperemia: ["olho vermelho", "hiperemia"],
+  dor_baixo_ventre: ["dor pelvica", "dor em baixo ventre"],
+  dor_lombar: ["dor lombar"],
+  dor_abdominal: ["dor abdominal", "dor de barriga"],
+  disuria: ["ardencia ao urinar", "disuria"],
+  polaciuria: ["urinar muitas vezes", "polaciuria"],
+  fotofobia: ["fotofobia"],
+  fonofobia: ["fonofobia"],
+  prurido: ["coceira", "prurido"],
+  lacrimejamento: ["lacrimejamento", "olho lacrimejando"],
+  secrecao: ["secrecao"],
+  hiposmia: ["perda de olfato", "hiposmia"],
+  halitose: ["mau halito", "halitose"],
+  adenomegalia: ["ganglio", "adenomegalia"],
+  diarreia: ["diarreia"],
+  tosse: ["tosse"],
+  febre: ["febre"],
+  coriza: ["coriza", "nariz escorrendo"],
+  irradiacao: ["irradiacao"],
+  aura: ["aura"],
+  urgencia: ["urgencia"],
+};
+
+const SUMMARY_SECTIONS = [
+  { aliases: ["historico medico", "historico clinico"], key: "historico" },
+  { aliases: ["resumo da queixa"], key: "queixa" },
+  { aliases: ["sintomas"], key: "sintomas" },
+  {
+    aliases: ["inicio / duracao", "inicio/duracao", "duracao", "inicio"],
+    key: "duracao",
+  },
+  { aliases: ["fatores melhora/piora", "fatores melhora piora", "fatores"], key: "fatores" },
+  { aliases: ["sinais de alarme", "sinais de alerta"], key: "sinaisAlarme" },
+  { aliases: ["documentos anexados", "documentos anexados extracao"], key: "documentos" },
+  { aliases: ["tipo de atendimento"], key: "tipoAtendimento" },
+  { aliases: ["cid sugerido", "cid"], key: "cid" },
+  { aliases: ["resumo clinico"], key: "resumoClinico" },
+  { aliases: ["protocolo sugerido"], key: "protocolo" },
+  {
+    aliases: ["conduta farmacologica sugerida", "conduta farmacologica"],
+    key: "condutaFarma",
+  },
+  {
+    aliases: [
+      "conduta nao farmacologica sugerida",
+      "conduta nao farmacologica",
+    ],
+    key: "condutaNaoFarma",
+  },
+  { aliases: ["anexos do paciente", "anexos do paciente pdf"], key: "anexos" },
+  { aliases: ["motivo da consulta"], key: "motivo" },
+  { aliases: ["informacoes organizadas por ia"], key: "ignore" },
+];
+
+const matchSectionHeader = (line) => {
+  const normalized = stripAccents(line)
+    .replace(/[():,.;]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return null;
+  for (const section of SUMMARY_SECTIONS) {
+    for (const alias of section.aliases) {
+      if (normalized === alias) return section.key;
+    }
+  }
+  return null;
+};
+
+const joinList = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item : ""))
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (typeof value === "string") return value;
+  return "";
+};
+
+const formatCidValue = (value) => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    const code = value.code || value.codigo || "";
+    const label = value.label || value.descricao || value.descrição || "";
+    if (code && label) return `${code} - ${label}`;
+    return code || label || "";
+  }
+  return "";
+};
+
+const formatDocumentos = (value) => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((doc) => {
+        if (typeof doc === "string") return doc;
+        if (!doc || typeof doc !== "object") return "";
+        const tipo = doc.tipo ? `${doc.tipo}: ` : "";
+        const resumo = doc.resumo_factual || doc.resumo || "";
+        const itens = Array.isArray(doc.itens) && doc.itens.length
+          ? ` (${doc.itens.join(", ")})`
+          : "";
+        return `${tipo}${resumo}${itens}`.trim();
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+};
+
+const JSON_FIELD_MAP = {
+  historico: ["historico_medico", "historico", "historico_clinico", "medical_history"],
+  queixa: ["resumo_queixa", "queixa", "chief_complaint"],
+  sintomas: ["sintomas", "symptoms"],
+  duracao: ["inicio_duracao", "duracao", "inicio", "duration"],
+  fatores: ["fatores", "fatores_melhora_piora"],
+  sinaisAlarme: ["sinais_alarme", "sinais_de_alerta", "sinais_alerta", "alarm_signs"],
+  documentos: ["documentos_anexados", "documentos"],
+  tipoAtendimento: ["tipo_atendimento"],
+  cid: ["cid_sugerido", "cid"],
+  resumoClinico: ["resumo_clinico"],
+  protocolo: ["protocolo_sugerido", "protocolo"],
+  condutaFarma: ["conduta_farmacologica", "conduta_farmacologica_sugerida"],
+  condutaNaoFarma: [
+    "conduta_nao_farmacologica",
+    "conduta_nao_farmacologica_sugerida",
+  ],
+  motivo: ["motivo_consulta", "motivo_da_consulta", "motivo"],
+  alergias: ["alergias", "allergies"],
+  comorbidades: ["comorbidades", "comorb"],
+};
+
+const pickField = (obj, keys) => {
+  for (const key of keys) {
+    if (obj[key] !== undefined && obj[key] !== null) return obj[key];
+  }
+  return undefined;
+};
+
+const stripJsonFence = (raw) => {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  return fenced ? fenced[1].trim() : raw.trim();
+};
+
+const tryParseJsonSummary = (raw) => {
+  const cleaned = stripJsonFence(raw);
+  if (!cleaned.startsWith("{") && !cleaned.startsWith("[")) return null;
+  let data;
+  try {
+    data = JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+  if (Array.isArray(data)) data = data[0];
+  if (!data || typeof data !== "object") return null;
+
+  const sections = {};
+  for (const [sectionKey, aliases] of Object.entries(JSON_FIELD_MAP)) {
+    const raw = pickField(data, aliases);
+    if (raw === undefined) continue;
+    let text;
+    if (sectionKey === "cid") {
+      text = formatCidValue(raw);
+    } else if (sectionKey === "documentos") {
+      text = formatDocumentos(raw);
+    } else if (Array.isArray(raw)) {
+      text = joinList(raw);
+    } else if (typeof raw === "string") {
+      text = raw;
+    } else {
+      text = "";
+    }
+    if (text && text.trim()) sections[sectionKey] = text.trim();
+  }
+  return Object.keys(sections).length ? sections : null;
+};
+
+const parseAiSummary = (raw) => {
+  if (!raw || !raw.trim()) return {};
+  const asJson = tryParseJsonSummary(raw);
+  if (asJson) return asJson;
+  const lines = raw.split(/\r?\n/);
+  const sections = {};
+  let currentKey = null;
+  let buffer = [];
+  const flush = () => {
+    if (!currentKey || currentKey === "ignore") {
+      buffer = [];
+      return;
+    }
+    const text = buffer.join("\n").trim();
+    buffer = [];
+    if (!text) return;
+    sections[currentKey] = sections[currentKey]
+      ? `${sections[currentKey]}\n${text}`
+      : text;
+  };
+  for (const line of lines) {
+    const header = matchSectionHeader(line);
+    if (header) {
+      flush();
+      currentKey = header;
+    } else {
+      buffer.push(line);
+    }
+  }
+  flush();
+  return sections;
+};
+
+const extractDuration = (text) => {
+  if (!text) return null;
+  const match = text.match(/(\d+)\s*(?:dias?|d)\b/i);
+  if (match) return match[1];
+  const lower = stripAccents(text);
+  if (/hoje|hj|menos de um dia|ultimas 24/.test(lower)) return "0";
+  return null;
+};
+
+const extractCid = (text) => {
+  if (!text) return null;
+  const match = text.match(/([A-Z])(\d{2})(?:\.(\d+))?/);
+  if (!match) return null;
+  const [, letter, num, sub] = match;
+  const code = sub ? `${letter}${num}.${sub}` : `${letter}${num}`;
+  const prefix = `${letter}${num}`;
+  return { code, cond: CID_TO_COND[prefix] || null };
+};
+
+const hasNegativeMark = (text) => {
+  if (!text) return true;
+  const lower = stripAccents(text);
+  return /^(nega|nenhum|nenhuma|sem |nao |n\/a|nao informado|nao referido|negativo|nao tem|nao possui)/.test(
+    lower
+  );
+};
+
+const mapSummaryToParams = (sections, baseParams) => {
+  const params = { ...baseParams };
+
+  if (sections.cid) {
+    const cidInfo = extractCid(sections.cid);
+    if (cidInfo) {
+      if (cidInfo.cond) params.cond = cidInfo.cond;
+      if (cidInfo.code) params.cid = cidInfo.code;
+      params.includeCid = true;
+    }
+  }
+
+  params.symptomStates = {};
+  (SYMPTOM_OPTIONS[params.cond] ?? []).forEach((opt) => {
+    params.symptomStates[opt.key] = "absent";
+  });
+  params.alertStates = {};
+  (ALERT_OPTIONS[params.cond] ?? []).forEach((opt) => {
+    params.alertStates[opt.key] = "absent";
+  });
+
+  const comorbSource = sections.comorbidades || sections.historico;
+  if (comorbSource) {
+    if (hasNegativeMark(comorbSource)) {
+      params.semComorb = true;
+      params.comorbTexto = "";
+    } else {
+      params.semComorb = false;
+      params.comorbTexto = comorbSource.replace(/\s+/g, " ").trim();
+    }
+  } else {
+    params.semComorb = true;
+    params.comorbTexto = "";
+  }
+
+  if (sections.alergias) {
+    if (hasNegativeMark(sections.alergias)) {
+      params.semAlergias = true;
+      params.alergiasTexto = "";
+    } else {
+      params.semAlergias = false;
+      params.alergiasTexto = sections.alergias.replace(/\s+/g, " ").trim();
+    }
+  } else {
+    params.semAlergias = true;
+    params.alergiasTexto = "";
+  }
+
+  const durationText = sections.duracao || sections.queixa || "";
+  const dur = extractDuration(durationText);
+  if (dur !== null) params.duracaoDias = dur;
+
+  const blob = [
+    sections.sintomas,
+    sections.queixa,
+    sections.resumoClinico,
+    sections.motivo,
+  ]
+    .filter(Boolean)
+    .map(stripAccents)
+    .join(" ");
+
+  (SYMPTOM_OPTIONS[params.cond] ?? []).forEach((opt) => {
+    const variations = [
+      stripAccents(opt.label),
+      ...(SYMPTOM_SYNONYMS[opt.key] ?? []).map(stripAccents),
+    ];
+    if (variations.some((token) => token && blob.includes(token))) {
+      params.symptomStates[opt.key] = "present";
+    }
+  });
+
+  if (sections.sinaisAlarme && !hasNegativeMark(sections.sinaisAlarme)) {
+    const alarmText = stripAccents(sections.sinaisAlarme);
+    (ALERT_OPTIONS[params.cond] ?? []).forEach((opt) => {
+      const token = stripAccents(opt.label);
+      if (token && alarmText.includes(token)) {
+        params.alertStates[opt.key] = "present";
+      }
+    });
+  }
+
+  params.sintomaticosTexto = "- SINTOMATICOS E HIDRATACAO CONFORME NECESSIDADE.";
+
+  const alertLabels = (ALERT_OPTIONS[params.cond] ?? []).map((opt) =>
+    opt.label.toUpperCase()
+  );
+  if (alertLabels.length) {
+    params.orientacoesTexto = `ORIENTADO SOBRE SINAIS DE RISCO (${formatList(
+      alertLabels
+    )}). EM CASO DE QUALQUER UM, PROCURAR PRONTO SOCORRO PRESENCIAL IMEDIATAMENTE.`;
+  } else {
+    params.orientacoesTexto =
+      "ORIENTADO A PROCURAR PRONTO SOCORRO PRESENCIAL IMEDIATAMENTE EM CASO DE PIORA CLINICA.";
+  }
+
+  params.observacoes = "";
+  params.includeAntibiotico = false;
+  params.antibioticoTexto = "";
+
+  if (!params.atestadoDias || params.atestadoDias === "0") {
+    params.atestadoDias = "1";
+  }
+
+  return params;
+};
+
 const TEMPLATES = {
   IVAS: (p) => {
     const common = baseCommon(p);
@@ -863,6 +1242,97 @@ const runTests = () => {
     details: "",
   });
 
+  const sampleSummary = [
+    "HISTORICO MEDICO",
+    "diabetes",
+    "",
+    "RESUMO DA QUEIXA",
+    "Paciente apresenta sintomas gripais ha 2 dias, incluindo tosse, febre e dor de cabeca.",
+    "",
+    "SINTOMAS",
+    "tosse febre dor de cabeca",
+    "",
+    "INICIO / DURACAO",
+    "2 dias",
+    "",
+    "CID SUGERIDO",
+    "J00 - Resfriado comum",
+    "",
+    "CONDUTA FARMACOLOGICA SUGERIDA",
+    "Paracetamol para alivio da febre e dor.",
+    "",
+    "CONDUTA NAO FARMACOLOGICA SUGERIDA",
+    "Repouso e hidratacao oral abundante.",
+  ].join("\n");
+  const parsed = parseAiSummary(sampleSummary);
+  const mappedFromSummary = mapSummaryToParams(parsed, buildDefaultParams());
+  const summaryOutput = TEMPLATES[mappedFromSummary.cond](
+    templateParams(mappedFromSummary)
+  );
+  results.push({
+    name: "Parser do resumo IA mapeia CID, sintomas, comorbidades e atestado padrao",
+    passed:
+      mappedFromSummary.cond === "IVAS" &&
+      mappedFromSummary.cid === "J00" &&
+      mappedFromSummary.symptomStates?.tosse === "present" &&
+      mappedFromSummary.symptomStates?.febre === "present" &&
+      mappedFromSummary.symptomStates?.cefaleia === "present" &&
+      mappedFromSummary.symptomStates?.congestao === "absent" &&
+      mappedFromSummary.comorbTexto?.toLowerCase().includes("diabetes") &&
+      mappedFromSummary.atestadoDias === "1" &&
+      summaryOutput.includes("COMORBIDADES: DIABETES.") &&
+      summaryOutput.includes("ATESTADO: 1 DIA.") &&
+      summaryOutput.includes("CID-10: J00.") &&
+      summaryOutput.includes("NEGA SINAIS DE ALERTA"),
+    details: "",
+  });
+
+  const sampleJson = JSON.stringify({
+    historico_medico: "diabetes",
+    resumo_queixa: "Sintomas gripais ha 2 dias.",
+    sintomas: ["tosse", "febre", "dor de cabeca"],
+    inicio_duracao: "2 dias",
+    sinais_alarme: [],
+    cid_sugerido: { code: "J00", label: "Resfriado comum" },
+    conduta_farmacologica: "Paracetamol para alivio da febre e dor.",
+    conduta_nao_farmacologica: "Repouso e hidratacao oral abundante.",
+  });
+  const parsedJson = parseAiSummary(sampleJson);
+  const mappedFromJson = mapSummaryToParams(parsedJson, buildDefaultParams());
+  const jsonOutput = TEMPLATES[mappedFromJson.cond](templateParams(mappedFromJson));
+  results.push({
+    name: "Parser aceita JSON com schema AiSummary",
+    passed:
+      mappedFromJson.cond === "IVAS" &&
+      mappedFromJson.cid === "J00" &&
+      mappedFromJson.symptomStates?.tosse === "present" &&
+      mappedFromJson.symptomStates?.cefaleia === "present" &&
+      mappedFromJson.comorbTexto?.toLowerCase().includes("diabetes") &&
+      jsonOutput.includes("COMORBIDADES: DIABETES.") &&
+      jsonOutput.includes("ATESTADO: 1 DIA.") &&
+      jsonOutput.includes("NEGA SINAIS DE ALERTA"),
+    details: "",
+  });
+
+  const sampleJsonAlert = JSON.stringify({
+    cid_sugerido: { code: "J00", label: "Resfriado comum" },
+    sintomas: ["tosse"],
+    sinais_alarme: ["dispneia intensa"],
+  });
+  const mappedAlert = mapSummaryToParams(
+    parseAiSummary(sampleJsonAlert),
+    buildDefaultParams()
+  );
+  const alertOutput = TEMPLATES[mappedAlert.cond](templateParams(mappedAlert));
+  results.push({
+    name: "JSON com sinais_alarme nao-vazio gera encaminhamento ao PS",
+    passed:
+      mappedAlert.alertStates?.dispneia_intensa === "present" &&
+      alertOutput.includes("CRITERIOS DE GRAVIDADE PRESENTES") &&
+      alertOutput.includes("ENCAMINHADO AO PRONTO SOCORRO"),
+    details: "",
+  });
+
   const conjuntivitePlan = TEMPLATES.CONJUNTIVITE(
     templateParams({
       cond: "CONJUNTIVITE",
@@ -884,6 +1354,12 @@ export default function SoapGeneratorPT() {
   const [output, setOutput] = useState("");
   const [tests, setTests] = useState([]);
   const [copyState, setCopyState] = useState("copiar");
+  const [mode, setMode] = useState("parametric");
+  const [summaryText, setSummaryText] = useState("");
+  const [summaryAtestadoDias, setSummaryAtestadoDias] = useState("1");
+  const [summaryTelemed, setSummaryTelemed] = useState(true);
+  const [summaryError, setSummaryError] = useState("");
+  const [summaryPreview, setSummaryPreview] = useState(null);
 
   const cidOptions = useMemo(
     () => CID_OPTIONS[params.cond] ?? [],
@@ -1022,6 +1498,36 @@ export default function SoapGeneratorPT() {
     setOutput(text);
   };
 
+  const handleGenerateFromSummary = () => {
+    if (!summaryText.trim()) {
+      setSummaryError("Cole o resumo da IA para gerar o SOAP.");
+      setSummaryPreview(null);
+      return;
+    }
+    const sections = parseAiSummary(summaryText);
+    if (!Object.keys(sections).length) {
+      setSummaryError(
+        "Nao foi possivel identificar secoes no texto colado. Verifique o formato."
+      );
+      setSummaryPreview(null);
+      return;
+    }
+    const base = buildDefaultParams();
+    base.telemed = summaryTelemed;
+    base.atestadoDias = summaryAtestadoDias?.toString() || "1";
+    const mapped = mapSummaryToParams(sections, base);
+    const template = TEMPLATES[mapped.cond];
+    if (!template) {
+      setSummaryError("Condicao identificada nao suportada.");
+      setSummaryPreview(null);
+      return;
+    }
+    setSummaryError("");
+    setSummaryPreview(sections);
+    setParams(mapped);
+    setOutput(template(mapped));
+  };
+
   const handleCopy = async () => {
     if (!output) return;
     try {
@@ -1083,6 +1589,124 @@ export default function SoapGeneratorPT() {
       <div className="two-column">
         <section className="panel">
           <div className="panel-body">
+            <div className="mode-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === "parametric"}
+                className={`mode-tab ${mode === "parametric" ? "active" : ""}`}
+                onClick={() => setMode("parametric")}
+              >
+                Parametrico
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === "summary"}
+                className={`mode-tab ${mode === "summary" ? "active" : ""}`}
+                onClick={() => setMode("summary")}
+              >
+                Resumo IA
+              </button>
+            </div>
+
+            {mode === "summary" && (
+              <div className="form-grid">
+                <div className="field field-wide">
+                  <label htmlFor="summaryText">Resumo da IA (cole abaixo)</label>
+                  <textarea
+                    id="summaryText"
+                    placeholder={`Ex.: HISTORICO MEDICO\ndiabetes\n\nRESUMO DA QUEIXA\n...\n\nSINTOMAS\ntosse, febre, dor de cabeca\n\nINICIO / DURACAO\n2 dias\n\nCID SUGERIDO\nJ00 - Resfriado comum\n\nCONDUTA FARMACOLOGICA SUGERIDA\nParacetamol...`}
+                    value={summaryText}
+                    onChange={(event) => setSummaryText(event.target.value)}
+                    style={{ minHeight: 220 }}
+                  />
+                  <small>
+                    O parser preenche automaticamente: condicao (via CID), sintomas,
+                    comorbidades, sinais de alerta e conduta. Alergias, comorbidades e
+                    sinais de alerta nao mencionados ficam como NEGA. Atestado fica
+                    ligado por padrao.
+                  </small>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="summaryAtestado">Atestado (dias)</label>
+                  <input
+                    id="summaryAtestado"
+                    type="number"
+                    min="0"
+                    value={summaryAtestadoDias}
+                    onChange={(event) => setSummaryAtestadoDias(event.target.value)}
+                  />
+                </div>
+
+                <div className="field">
+                  <label>Atendimento</label>
+                  <div className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      id="summaryTelemed"
+                      checked={summaryTelemed}
+                      onChange={() => setSummaryTelemed((prev) => !prev)}
+                    />
+                    <label htmlFor="summaryTelemed">Via telemedicina</label>
+                  </div>
+                </div>
+
+                {summaryError && (
+                  <div className="field field-wide">
+                    <small style={{ color: "#b91c1c", fontWeight: 600 }}>
+                      {summaryError}
+                    </small>
+                  </div>
+                )}
+
+                {summaryPreview && (
+                  <div className="field field-wide">
+                    <label>Secoes detectadas</label>
+                    <ul className="summary-preview">
+                      {Object.entries(summaryPreview).map(([key, value]) => (
+                        <li key={key}>
+                          <strong>{key}:</strong> {value.slice(0, 140)}
+                          {value.length > 140 ? "..." : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {mode === "summary" && (
+              <div className="actions">
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={handleGenerateFromSummary}
+                >
+                  Gerar SOAP a partir do resumo
+                </button>
+                <button
+                  className="btn secondary"
+                  type="button"
+                  onClick={handleCopy}
+                  disabled={!output}
+                >
+                  {copyState}
+                </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={handleDownload}
+                  disabled={!output}
+                >
+                  Baixar .txt
+                </button>
+              </div>
+            )}
+
+            {mode === "parametric" && (
+            <>
             <div className="form-grid">
               <div className="field">
                 <label>Condicao</label>
@@ -1513,6 +2137,8 @@ export default function SoapGeneratorPT() {
                   </li>
                 ))}
               </ul>
+            )}
+            </>
             )}
           </div>
         </section>
