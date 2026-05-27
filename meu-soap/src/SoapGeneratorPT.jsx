@@ -345,7 +345,8 @@ const formatObservacoes = (p) =>
 
 const hasAlertPositive = (p) => {
   const options = ALERT_OPTIONS[p.cond] ?? [];
-  return options.some((item) => p.alertStates?.[item.key] === "present");
+  if (options.some((item) => p.alertStates?.[item.key] === "present")) return true;
+  return !!p.extraAlertText;
 };
 
 const formatList = (list) => {
@@ -390,8 +391,13 @@ const formatRisk = (p) => {
     }
   });
 
-  if (positives.length > 0) {
-    return `APRESENTA SINAIS DE ALERTA (${formatList(positives)}). CRITERIOS DE GRAVIDADE PRESENTES.`;
+  const extras = p.extraAlertText ? [p.extraAlertText.toUpperCase()] : [];
+
+  if (positives.length > 0 || extras.length > 0) {
+    return `APRESENTA SINAIS DE ALERTA (${formatList([
+      ...positives,
+      ...extras,
+    ])}). CRITERIOS DE GRAVIDADE PRESENTES.`;
   }
 
   if (negatives.length > 0) {
@@ -621,14 +627,18 @@ const SUMMARY_SECTIONS = [
 ];
 
 const matchSectionHeader = (line) => {
-  const normalized = stripAccents(line)
-    .replace(/[():,.;]/g, " ")
+  if (!line || !line.trim()) return null;
+  const colonIdx = line.indexOf(":");
+  const headerRaw = colonIdx >= 0 ? line.slice(0, colonIdx) : line;
+  const valueRaw = colonIdx >= 0 ? line.slice(colonIdx + 1).trim() : null;
+  const normalized = stripAccents(headerRaw)
+    .replace(/[(),;.]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (!normalized) return null;
   for (const section of SUMMARY_SECTIONS) {
     for (const alias of section.aliases) {
-      if (normalized === alias) return section.key;
+      if (normalized === alias) return { key: section.key, value: valueRaw };
     }
   }
   return null;
@@ -769,7 +779,8 @@ const parseAiSummary = (raw) => {
     const header = matchSectionHeader(line);
     if (header) {
       flush();
-      currentKey = header;
+      currentKey = header.key;
+      if (header.value) buffer.push(header.value);
     } else {
       buffer.push(line);
     }
@@ -808,12 +819,17 @@ const hasNegativeMark = (text) => {
 const mapSummaryToParams = (sections, baseParams) => {
   const params = { ...baseParams };
 
+  params.unsupportedCid = "";
   if (sections.cid) {
     const cidInfo = extractCid(sections.cid);
     if (cidInfo) {
-      if (cidInfo.cond) params.cond = cidInfo.cond;
-      if (cidInfo.code) params.cid = cidInfo.code;
-      params.includeCid = true;
+      if (cidInfo.cond) {
+        params.cond = cidInfo.cond;
+        if (cidInfo.code) params.cid = cidInfo.code;
+        params.includeCid = true;
+      } else {
+        params.unsupportedCid = cidInfo.code || "";
+      }
     }
   }
 
@@ -877,14 +893,22 @@ const mapSummaryToParams = (sections, baseParams) => {
     }
   });
 
+  params.extraAlertText = "";
   if (sections.sinaisAlarme && !hasNegativeMark(sections.sinaisAlarme)) {
     const alarmText = stripAccents(sections.sinaisAlarme);
+    let matched = false;
     (ALERT_OPTIONS[params.cond] ?? []).forEach((opt) => {
       const token = stripAccents(opt.label);
       if (token && alarmText.includes(token)) {
         params.alertStates[opt.key] = "present";
+        matched = true;
       }
     });
+    if (!matched) {
+      params.extraAlertText = sections.sinaisAlarme
+        .replace(/\s+/g, " ")
+        .trim();
+    }
   }
 
   params.sintomaticosTexto = "- SINTOMATICOS E HIDRATACAO CONFORME NECESSIDADE.";
@@ -1333,6 +1357,61 @@ const runTests = () => {
     details: "",
   });
 
+  const nonCanonicalAlarm = JSON.stringify({
+    cid_sugerido: { code: "J00", label: "Resfriado comum" },
+    sintomas: ["tosse"],
+    sinais_alarme: ["dispneia"],
+  });
+  const mappedNonCanon = mapSummaryToParams(
+    parseAiSummary(nonCanonicalAlarm),
+    buildDefaultParams()
+  );
+  const nonCanonOutput = TEMPLATES[mappedNonCanon.cond](
+    templateParams(mappedNonCanon)
+  );
+  results.push({
+    name: "P1: sinais_alarme nao-canonico ainda forca encaminhamento ao PS",
+    passed:
+      mappedNonCanon.extraAlertText?.toLowerCase().includes("dispneia") &&
+      nonCanonOutput.includes("CRITERIOS DE GRAVIDADE PRESENTES") &&
+      nonCanonOutput.includes("ENCAMINHADO AO PRONTO SOCORRO") &&
+      !nonCanonOutput.includes("NEGA SINAIS DE ALERTA"),
+    details: "",
+  });
+
+  const unsupportedCidJson = JSON.stringify({
+    cid_sugerido: { code: "R51.9", label: "Cefaleia, NE" },
+    sintomas: ["dor de cabeca"],
+  });
+  const mappedUnsupported = mapSummaryToParams(
+    parseAiSummary(unsupportedCidJson),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P1: CID nao mapeado nao cai em IVAS - sinaliza unsupportedCid",
+    passed:
+      mappedUnsupported.unsupportedCid === "R51.9" &&
+      mappedUnsupported.cond === "IVAS",
+    details: "",
+  });
+
+  const inlineHeaders = [
+    "HISTORICO MEDICO: diabetes",
+    "SINTOMAS: tosse, febre, dor de cabeca",
+    "INICIO / DURACAO: 2 dias",
+    "CID SUGERIDO: J00 - Resfriado comum",
+  ].join("\n");
+  const inlineParsed = parseAiSummary(inlineHeaders);
+  results.push({
+    name: "P2: parser aceita header com valor inline (HEADER: valor)",
+    passed:
+      inlineParsed.historico === "diabetes" &&
+      inlineParsed.sintomas?.includes("tosse") &&
+      inlineParsed.duracao === "2 dias" &&
+      inlineParsed.cid?.includes("J00"),
+    details: "",
+  });
+
   const conjuntivitePlan = TEMPLATES.CONJUNTIVITE(
     templateParams({
       cond: "CONJUNTIVITE",
@@ -1539,6 +1618,12 @@ export default function SoapGeneratorPT() {
       base.telemed = summaryTelemed;
       base.atestadoDias = summaryAtestadoDias?.toString() || "1";
       const mapped = mapSummaryToParams(sections, base);
+      if (mapped.unsupportedCid) {
+        setAiError(
+          `CID ${mapped.unsupportedCid} retornado pela IA nao tem template SOAP suportado. Use o modo Parametrico para escolher a condicao manualmente.`
+        );
+        return;
+      }
       const template = TEMPLATES[mapped.cond];
       if (!template) {
         setAiError("Condicao identificada nao suportada.");
@@ -1574,6 +1659,13 @@ export default function SoapGeneratorPT() {
     base.telemed = summaryTelemed;
     base.atestadoDias = summaryAtestadoDias?.toString() || "1";
     const mapped = mapSummaryToParams(sections, base);
+    if (mapped.unsupportedCid) {
+      setSummaryError(
+        `CID ${mapped.unsupportedCid} nao tem template SOAP suportado neste app. Use o modo Parametrico para escolher a condicao manualmente.`
+      );
+      setSummaryPreview(sections);
+      return;
+    }
     const template = TEMPLATES[mapped.cond];
     if (!template) {
       setSummaryError("Condicao identificada nao suportada.");
