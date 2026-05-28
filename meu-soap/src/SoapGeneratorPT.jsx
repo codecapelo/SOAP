@@ -911,7 +911,13 @@ const mapSummaryToParams = (sections, baseParams) => {
     }
   }
 
-  params.sintomaticosTexto = "- SINTOMATICOS E HIDRATACAO CONFORME NECESSIDADE.";
+  if (sections.condutaNaoFarma) {
+    const text = sections.condutaNaoFarma.replace(/\s+/g, " ").trim();
+    const withPeriod = /[.!?]$/.test(text) ? text : `${text}.`;
+    params.sintomaticosTexto = `- ${withPeriod.toUpperCase()}`;
+  } else {
+    params.sintomaticosTexto = "- SINTOMATICOS CONFORME NECESSIDADE.";
+  }
 
   const alertLabels = (ALERT_OPTIONS[params.cond] ?? []).map((opt) =>
     opt.label.toUpperCase()
