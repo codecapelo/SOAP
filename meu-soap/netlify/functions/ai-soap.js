@@ -1,3 +1,5 @@
+import { guard } from "./_guard.js";
+
 const SYSTEM_PROMPT = `Voce e um medico que escreve prontuarios SOAP em portugues brasileiro estilo telemedicina, em CAIXA ALTA SEM ACENTOS.
 
 Receba um resumo estruturado de consulta e retorne o SOAP completo no formato:
@@ -63,6 +65,9 @@ export default async (req) => {
       headers: { "Content-Type": "application/json" },
     });
   }
+
+  const blocked = guard(req);
+  if (blocked) return blocked;
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {

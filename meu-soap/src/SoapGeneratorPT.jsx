@@ -820,9 +820,11 @@ const extractDuration = (text) => {
 
 const extractCid = (text) => {
   if (!text) return null;
-  const match = text.match(/([A-Z])(\d{2})(?:\.(\d+))?/);
+  const match = text.match(/([A-Za-z])(\d{2})(?:\.(\d+))?/);
   if (!match) return null;
-  const [, letter, num, sub] = match;
+  const letter = match[1].toUpperCase();
+  const num = match[2];
+  const sub = match[3];
   const code = sub ? `${letter}${num}.${sub}` : `${letter}${num}`;
   const prefix = `${letter}${num}`;
   return { code, cond: CID_TO_COND[prefix] || null };
@@ -889,7 +891,9 @@ const mapSummaryToParams = (sections, baseParams) => {
     if (adminType === "encaminhamento_eletivo") {
       params.adminEspecialidade = (sections.especialidade || "").trim();
     }
-    params.atestadoDias = "0";
+    if (params.atestadoDias === undefined || params.atestadoDias === null || params.atestadoDias === "") {
+      params.atestadoDias = "0";
+    }
     return params;
   }
 
@@ -1669,6 +1673,33 @@ const runTests = () => {
       allergyInHistorico.semAlergias === false &&
       allergyInHistorico.alergiasTexto?.toLowerCase().includes("dipirona") &&
       allergyInHistorico.semComorb === true,
+    details: "",
+  });
+
+  const lowercaseCid = mapSummaryToParams(
+    parseAiSummary(JSON.stringify({ cid_sugerido: { code: "a09", label: "GECA" } })),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P2 Codex: CID em minuscula normalizado e mapeado",
+    passed: lowercaseCid.cond === "GECA" && lowercaseCid.cid === "A09",
+    details: "",
+  });
+
+  const adminWithAtestado = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        tipo_demanda: "renovacao_receita",
+        medicacao: "losartana",
+      })
+    ),
+    { ...buildDefaultParams(), atestadoDias: "2" }
+  );
+  results.push({
+    name: "P2 Codex: admin preserva atestado quando usuario digita valor",
+    passed:
+      adminWithAtestado.cond === "ADMIN" &&
+      adminWithAtestado.atestadoDias === "2",
     details: "",
   });
 

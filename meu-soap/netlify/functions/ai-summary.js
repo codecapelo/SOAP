@@ -1,3 +1,5 @@
+import { guard } from "./_guard.js";
+
 const SYSTEM_PROMPT = `Voce e um assistente clinico que organiza informacoes de telemedicina em JSON estruturado para um prontuario SOAP em portugues brasileiro.
 
 Receba o motivo da consulta (texto livre do paciente) e o historico medico (opcional). Retorne EXCLUSIVAMENTE um JSON valido com este schema:
@@ -44,6 +46,9 @@ export default async (req) => {
       headers: { "Content-Type": "application/json" },
     });
   }
+
+  const blocked = guard(req);
+  if (blocked) return blocked;
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
