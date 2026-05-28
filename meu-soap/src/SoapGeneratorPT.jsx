@@ -221,6 +221,8 @@ const buildDefaultParams = () => {
     enxaquecaLateralidade: "unilateral",
     adminMedicacao: "",
     adminRenova: true,
+    adminExames: "",
+    adminEspecialidade: "",
   };
 };
 
@@ -345,7 +347,8 @@ const formatObservacoes = (p) =>
 
 const hasAlertPositive = (p) => {
   const options = ALERT_OPTIONS[p.cond] ?? [];
-  return options.some((item) => p.alertStates?.[item.key] === "present");
+  if (options.some((item) => p.alertStates?.[item.key] === "present")) return true;
+  return !!p.extraAlertText;
 };
 
 const formatList = (list) => {
@@ -390,8 +393,13 @@ const formatRisk = (p) => {
     }
   });
 
-  if (positives.length > 0) {
-    return `APRESENTA SINAIS DE ALERTA (${formatList(positives)}). CRITERIOS DE GRAVIDADE PRESENTES.`;
+  const extras = p.extraAlertText ? [p.extraAlertText.toUpperCase()] : [];
+
+  if (positives.length > 0 || extras.length > 0) {
+    return `APRESENTA SINAIS DE ALERTA (${formatList([
+      ...positives,
+      ...extras,
+    ])}). CRITERIOS DE GRAVIDADE PRESENTES.`;
   }
 
   if (negatives.length > 0) {
@@ -423,10 +431,12 @@ const baseCommon = (p) => ({
   hasAlert: hasAlertPositive(p),
 });
 
-const appendAlertToAssessment = (baseText, common) =>
-  common.hasAlert
+const appendAlertToAssessment = (baseText, common) => {
+  const withAlert = common.hasAlert
     ? `${baseText} SINAIS DE ALERTA IDENTIFICADOS NA AVALIACAO.`
     : baseText;
+  return common.cid ? `${withAlert} ${common.cid}` : withAlert;
+};
 
 const buildSubjective = (p, common, detailLines = []) => {
   const symptoms = formatSymptoms(p);
@@ -495,7 +505,6 @@ const buildPlan = (p, common, extraLines = []) => {
     return [
       "ENCAMINHADO AO PRONTO SOCORRO PRESENCIAL PARA MELHOR AVALIACAO DEVIDO AO SINAL DE ALERTA RELATADO.",
       adjustedAtestado,
-      common.cid,
       common.observacoes,
     ]
       .filter(Boolean)
@@ -528,9 +537,496 @@ const buildPlan = (p, common, extraLines = []) => {
     );
   }
 
-  lines.push(adjustedAtestado, common.cid, common.observacoes);
+  lines.push(adjustedAtestado, common.observacoes);
 
   return lines.filter(Boolean).join(" \n");
+};
+
+const stripAccents = (value) =>
+  (value ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
+
+const CID_TO_COND = {
+  J00: "IVAS",
+  J06: "IVAS",
+  J02: "FARINGO",
+  J03: "FARINGO",
+  A09: "GECA",
+  K52: "GECA",
+  N30: "ITU",
+  N39: "ITU",
+  M54: "DOR_LOMBAR",
+  G43: "ENXAQUECA",
+  J01: "SINUSITE",
+  B30: "CONJUNTIVITE",
+  H10: "CONJUNTIVITE",
+};
+
+const SYMPTOM_SYNONYMS = {
+  cefaleia: ["dor de cabeca", "dor cabeca", "cefaleia"],
+  congestao: ["congestao nasal", "nariz entupido", "congestao"],
+  odinofagia: ["dor de garganta", "dor na garganta", "odinofagia"],
+  mialgia: ["dor muscular", "dores musculares", "mialgia"],
+  otalgia: ["dor de ouvido", "dor no ouvido", "otalgia"],
+  nauseas: ["nausea", "enjoo"],
+  vomitos: ["vomito"],
+  rinorreia_purulenta: ["rinorreia", "secrecao nasal"],
+  dor_face: ["dor facial", "pressao facial", "dor na face"],
+  hiperemia: ["olho vermelho", "hiperemia"],
+  dor_baixo_ventre: ["dor pelvica", "dor em baixo ventre"],
+  dor_lombar: ["dor lombar"],
+  dor_abdominal: ["dor abdominal", "dor de barriga"],
+  disuria: ["ardencia ao urinar", "disuria"],
+  polaciuria: ["urinar muitas vezes", "polaciuria"],
+  fotofobia: ["fotofobia"],
+  fonofobia: ["fonofobia"],
+  prurido: ["coceira", "prurido"],
+  lacrimejamento: ["lacrimejamento", "olho lacrimejando"],
+  secrecao: ["secrecao"],
+  hiposmia: ["perda de olfato", "hiposmia"],
+  halitose: ["mau halito", "halitose"],
+  adenomegalia: ["ganglio", "adenomegalia"],
+  diarreia: ["diarreia"],
+  tosse: ["tosse"],
+  febre: ["febre"],
+  coriza: ["coriza", "nariz escorrendo"],
+  irradiacao: ["irradiacao"],
+  aura: ["aura"],
+  urgencia: ["urgencia"],
+};
+
+const SUMMARY_SECTIONS = [
+  { aliases: ["historico medico", "historico clinico"], key: "historico" },
+  { aliases: ["resumo da queixa"], key: "queixa" },
+  { aliases: ["sintomas"], key: "sintomas" },
+  {
+    aliases: ["inicio / duracao", "inicio/duracao", "duracao", "inicio"],
+    key: "duracao",
+  },
+  { aliases: ["fatores melhora/piora", "fatores melhora piora", "fatores"], key: "fatores" },
+  { aliases: ["sinais de alarme", "sinais de alerta"], key: "sinaisAlarme" },
+  { aliases: ["documentos anexados", "documentos anexados extracao"], key: "documentos" },
+  { aliases: ["tipo de atendimento"], key: "tipoAtendimento" },
+  { aliases: ["cid sugerido", "cid"], key: "cid" },
+  { aliases: ["resumo clinico"], key: "resumoClinico" },
+  { aliases: ["protocolo sugerido"], key: "protocolo" },
+  {
+    aliases: ["conduta farmacologica sugerida", "conduta farmacologica"],
+    key: "condutaFarma",
+  },
+  {
+    aliases: [
+      "conduta nao farmacologica sugerida",
+      "conduta nao farmacologica",
+    ],
+    key: "condutaNaoFarma",
+  },
+  { aliases: ["anexos do paciente", "anexos do paciente pdf"], key: "anexos" },
+  { aliases: ["motivo da consulta"], key: "motivo" },
+  { aliases: ["tipo de demanda", "demanda administrativa", "demanda"], key: "tipoDemanda" },
+  { aliases: ["medicacao", "medicamento"], key: "medicacao" },
+  { aliases: ["exames solicitados", "exames"], key: "examesSolicitados" },
+  { aliases: ["encaminhamento", "especialidade", "encaminhamento especialidade"], key: "especialidade" },
+  { aliases: ["informacoes organizadas por ia"], key: "ignore" },
+];
+
+const matchSectionHeader = (line) => {
+  if (!line || !line.trim()) return null;
+  const colonIdx = line.indexOf(":");
+  const headerRaw = colonIdx >= 0 ? line.slice(0, colonIdx) : line;
+  const valueRaw = colonIdx >= 0 ? line.slice(colonIdx + 1).trim() : null;
+  const normalized = stripAccents(headerRaw)
+    .replace(/[(),;.]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return null;
+  for (const section of SUMMARY_SECTIONS) {
+    for (const alias of section.aliases) {
+      if (normalized === alias) return { key: section.key, value: valueRaw };
+    }
+  }
+  return null;
+};
+
+const joinList = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item : ""))
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (typeof value === "string") return value;
+  return "";
+};
+
+const formatCidValue = (value) => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    const code = value.code || value.codigo || "";
+    const label = value.label || value.descricao || value.descrição || "";
+    if (code && label) return `${code} - ${label}`;
+    return code || label || "";
+  }
+  return "";
+};
+
+const formatDocumentos = (value) => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((doc) => {
+        if (typeof doc === "string") return doc;
+        if (!doc || typeof doc !== "object") return "";
+        const tipo = doc.tipo ? `${doc.tipo}: ` : "";
+        const resumo = doc.resumo_factual || doc.resumo || "";
+        const itens = Array.isArray(doc.itens) && doc.itens.length
+          ? ` (${doc.itens.join(", ")})`
+          : "";
+        return `${tipo}${resumo}${itens}`.trim();
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+};
+
+const JSON_FIELD_MAP = {
+  historico: ["historico_medico", "historico", "historico_clinico", "medical_history"],
+  queixa: ["resumo_queixa", "queixa", "chief_complaint"],
+  sintomas: ["sintomas", "symptoms"],
+  duracao: ["inicio_duracao", "duracao", "inicio", "duration"],
+  fatores: ["fatores", "fatores_melhora_piora"],
+  sinaisAlarme: ["sinais_alarme", "sinais_de_alerta", "sinais_alerta", "alarm_signs"],
+  documentos: ["documentos_anexados", "documentos"],
+  tipoAtendimento: ["tipo_atendimento"],
+  cid: ["cid_sugerido", "cid"],
+  resumoClinico: ["resumo_clinico"],
+  protocolo: ["protocolo_sugerido", "protocolo"],
+  condutaFarma: ["conduta_farmacologica", "conduta_farmacologica_sugerida"],
+  condutaNaoFarma: [
+    "conduta_nao_farmacologica",
+    "conduta_nao_farmacologica_sugerida",
+  ],
+  motivo: ["motivo_consulta", "motivo_da_consulta", "motivo"],
+  alergias: ["alergias", "allergies"],
+  comorbidades: ["comorbidades", "comorb"],
+  tipoDemanda: ["tipo_demanda", "demanda_administrativa", "demanda"],
+  medicacao: ["medicacao", "medicamento"],
+  examesSolicitados: ["exames_solicitados", "exames"],
+  especialidade: [
+    "encaminhamento_especialidade",
+    "especialidade",
+    "encaminhamento",
+  ],
+};
+
+const pickField = (obj, keys) => {
+  for (const key of keys) {
+    if (obj[key] !== undefined && obj[key] !== null) return obj[key];
+  }
+  return undefined;
+};
+
+const stripJsonFence = (raw) => {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  return fenced ? fenced[1].trim() : raw.trim();
+};
+
+const tryParseJsonSummary = (raw) => {
+  const cleaned = stripJsonFence(raw);
+  if (!cleaned.startsWith("{") && !cleaned.startsWith("[")) return null;
+  let data;
+  try {
+    data = JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+  if (Array.isArray(data)) data = data[0];
+  if (!data || typeof data !== "object") return null;
+
+  const sections = {};
+  for (const [sectionKey, aliases] of Object.entries(JSON_FIELD_MAP)) {
+    const raw = pickField(data, aliases);
+    if (raw === undefined) continue;
+    let text;
+    if (sectionKey === "cid") {
+      text = formatCidValue(raw);
+    } else if (sectionKey === "documentos") {
+      text = formatDocumentos(raw);
+    } else if (Array.isArray(raw)) {
+      text = joinList(raw);
+    } else if (typeof raw === "string") {
+      text = raw;
+    } else {
+      text = "";
+    }
+    if (text && text.trim()) sections[sectionKey] = text.trim();
+  }
+  return Object.keys(sections).length ? sections : null;
+};
+
+const parseAiSummary = (raw) => {
+  if (!raw || !raw.trim()) return {};
+  const asJson = tryParseJsonSummary(raw);
+  if (asJson) return asJson;
+  const lines = raw.split(/\r?\n/);
+  const sections = {};
+  let currentKey = null;
+  let buffer = [];
+  const flush = () => {
+    if (!currentKey || currentKey === "ignore") {
+      buffer = [];
+      return;
+    }
+    const text = buffer.join("\n").trim();
+    buffer = [];
+    if (!text) return;
+    sections[currentKey] = sections[currentKey]
+      ? `${sections[currentKey]}\n${text}`
+      : text;
+  };
+  for (const line of lines) {
+    const header = matchSectionHeader(line);
+    if (header) {
+      flush();
+      currentKey = header.key;
+      if (header.value) buffer.push(header.value);
+    } else {
+      buffer.push(line);
+    }
+  }
+  flush();
+  return sections;
+};
+
+const extractDuration = (text) => {
+  if (!text) return null;
+  const lower = stripAccents(text).toLowerCase();
+  const days = lower.match(/(\d+)\s*(?:dias?|d)\b/);
+  if (days) return days[1];
+  const weeks = lower.match(/(\d+)\s*(?:semanas?|sem)\b/);
+  if (weeks) return String(parseInt(weeks[1], 10) * 7);
+  const months = lower.match(/(\d+)\s*(?:meses?|mes)\b/);
+  if (months) return String(parseInt(months[1], 10) * 30);
+  if (/(\d+)\s*(?:horas?|h)\b/.test(lower)) return "0";
+  if (/hoje|hj|menos de um dia|ultimas 24/.test(lower)) return "0";
+  return null;
+};
+
+const extractCid = (text) => {
+  if (!text) return null;
+  const match = text.match(/([A-Za-z])(\d{2})(?:\.(\d+))?/);
+  if (!match) return null;
+  const letter = match[1].toUpperCase();
+  const num = match[2];
+  const sub = match[3];
+  const code = sub ? `${letter}${num}.${sub}` : `${letter}${num}`;
+  const prefix = `${letter}${num}`;
+  return { code, cond: CID_TO_COND[prefix] || null };
+};
+
+const hasNegativeMark = (text) => {
+  if (!text) return true;
+  const lower = stripAccents(text);
+  return /^(nega|nenhum|nenhuma|sem |nao |n\/a|nao informado|nao referido|negativo|nao tem|nao possui)/.test(
+    lower
+  );
+};
+
+const ADMIN_TYPE_MAP = {
+  renovacao_receita: "renovacao_receita",
+  renovacao: "renovacao_receita",
+  renovacao_de_receita: "renovacao_receita",
+  receita: "renovacao_receita",
+  solicitacao_exames: "solicitacao_exames",
+  solicitacao_de_exames: "solicitacao_exames",
+  exames: "solicitacao_exames",
+  exames_eletivos: "solicitacao_exames",
+  encaminhamento_eletivo: "encaminhamento_eletivo",
+  encaminhamento: "encaminhamento_eletivo",
+};
+
+const resolveAdminType = (raw) => {
+  if (!raw) return null;
+  const norm = stripAccents(raw).replace(/[^a-z0-9 ]/g, " ").trim().replace(/\s+/g, "_");
+  if (ADMIN_TYPE_MAP[norm]) return ADMIN_TYPE_MAP[norm];
+  for (const key of Object.keys(ADMIN_TYPE_MAP)) {
+    if (norm.includes(key)) return ADMIN_TYPE_MAP[key];
+  }
+  return null;
+};
+
+const mapSummaryToParams = (sections, baseParams) => {
+  const params = { ...baseParams };
+
+  const adminType = resolveAdminType(sections.tipoDemanda);
+  if (adminType) {
+    params.cond = "ADMIN";
+    params.administrativoTipo = adminType;
+    params.includeCid = false;
+    params.cid = "";
+    params.unsupportedCid = "";
+    params.symptomStates = {};
+    params.alertStates = {};
+    params.semAlergias = true;
+    params.alergiasTexto = "";
+    params.semComorb = true;
+    params.comorbTexto = "";
+    if (sections.historico && !hasNegativeMark(sections.historico)) {
+      params.semComorb = false;
+      params.comorbTexto = sections.historico.replace(/\s+/g, " ").trim();
+    }
+    if (adminType === "renovacao_receita") {
+      params.adminMedicacao = (sections.medicacao || "").trim();
+      params.adminRenova = true;
+    }
+    if (adminType === "solicitacao_exames") {
+      params.adminExames = (sections.examesSolicitados || "").trim();
+    }
+    if (adminType === "encaminhamento_eletivo") {
+      params.adminEspecialidade = (sections.especialidade || "").trim();
+    }
+    if (params.atestadoDias === undefined || params.atestadoDias === null || params.atestadoDias === "") {
+      params.atestadoDias = "0";
+    }
+    return params;
+  }
+
+  params.unsupportedCid = "";
+  if (sections.cid) {
+    const cidInfo = extractCid(sections.cid);
+    if (cidInfo) {
+      if (cidInfo.cond) {
+        params.cond = cidInfo.cond;
+        if (cidInfo.code) params.cid = cidInfo.code;
+        params.includeCid = true;
+      } else {
+        params.unsupportedCid = cidInfo.code || "";
+      }
+    }
+  }
+
+  params.symptomStates = {};
+  (SYMPTOM_OPTIONS[params.cond] ?? []).forEach((opt) => {
+    params.symptomStates[opt.key] = "absent";
+  });
+  params.alertStates = {};
+  (ALERT_OPTIONS[params.cond] ?? []).forEach((opt) => {
+    params.alertStates[opt.key] = "absent";
+  });
+
+  const comorbSource = sections.comorbidades || sections.historico;
+  if (comorbSource) {
+    if (hasNegativeMark(comorbSource)) {
+      params.semComorb = true;
+      params.comorbTexto = "";
+    } else {
+      params.semComorb = false;
+      params.comorbTexto = comorbSource.replace(/\s+/g, " ").trim();
+    }
+  } else {
+    params.semComorb = true;
+    params.comorbTexto = "";
+  }
+
+  if (sections.alergias) {
+    if (hasNegativeMark(sections.alergias)) {
+      params.semAlergias = true;
+      params.alergiasTexto = "";
+    } else {
+      params.semAlergias = false;
+      params.alergiasTexto = sections.alergias.replace(/\s+/g, " ").trim();
+    }
+  } else {
+    params.semAlergias = true;
+    params.alergiasTexto = "";
+  }
+
+  const durationText = sections.duracao || sections.queixa || "";
+  const dur = extractDuration(durationText);
+  if (dur !== null) params.duracaoDias = dur;
+
+  const positiveBlob = sections.sintomas
+    ? stripAccents(sections.sintomas)
+    : [sections.queixa, sections.resumoClinico, sections.motivo]
+        .filter(Boolean)
+        .map(stripAccents)
+        .join(" ");
+
+  const isNegatedAt = (text, idx) => {
+    const window = text.slice(Math.max(0, idx - 25), idx);
+    return /\b(sem|nega|nao\s+(tem|apresenta|relata)|negativo\s+para)\s+[a-z\s]*$/i.test(
+      window
+    );
+  };
+
+  (SYMPTOM_OPTIONS[params.cond] ?? []).forEach((opt) => {
+    const variations = [
+      stripAccents(opt.label),
+      ...(SYMPTOM_SYNONYMS[opt.key] ?? []).map(stripAccents),
+    ];
+    for (const token of variations) {
+      if (!token) continue;
+      const idx = positiveBlob.indexOf(token);
+      if (idx !== -1 && !isNegatedAt(positiveBlob, idx)) {
+        params.symptomStates[opt.key] = "present";
+        break;
+      }
+    }
+  });
+
+  params.extraAlertText = "";
+  if (sections.sinaisAlarme && !hasNegativeMark(sections.sinaisAlarme)) {
+    const alarmText = stripAccents(sections.sinaisAlarme);
+    let matched = false;
+    (ALERT_OPTIONS[params.cond] ?? []).forEach((opt) => {
+      const token = stripAccents(opt.label);
+      if (token && alarmText.includes(token)) {
+        params.alertStates[opt.key] = "present";
+        matched = true;
+      }
+    });
+    if (!matched) {
+      params.extraAlertText = sections.sinaisAlarme
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+  }
+
+  if (sections.condutaNaoFarma) {
+    const text = sections.condutaNaoFarma.replace(/\s+/g, " ").trim();
+    const withPeriod = /[.!?]$/.test(text) ? text : `${text}.`;
+    params.sintomaticosTexto = `- ${withPeriod.toUpperCase()}`;
+  } else {
+    params.sintomaticosTexto = "- SINTOMATICOS CONFORME NECESSIDADE.";
+  }
+
+  const alertLabels = (ALERT_OPTIONS[params.cond] ?? []).map((opt) =>
+    opt.label.toUpperCase()
+  );
+  if (alertLabels.length) {
+    params.orientacoesTexto = `ORIENTADO SOBRE SINAIS DE RISCO (${formatList(
+      alertLabels
+    )}). EM CASO DE QUALQUER UM, PROCURAR PRONTO SOCORRO PRESENCIAL IMEDIATAMENTE.`;
+  } else {
+    params.orientacoesTexto =
+      "ORIENTADO A PROCURAR PRONTO SOCORRO PRESENCIAL IMEDIATAMENTE EM CASO DE PIORA CLINICA.";
+  }
+
+  params.observacoes = "";
+  params.includeAntibiotico = false;
+  params.antibioticoTexto = "";
+
+  if (params.atestadoDias === undefined || params.atestadoDias === null || params.atestadoDias === "") {
+    params.atestadoDias = "1";
+  }
+
+  return params;
 };
 
 const TEMPLATES = {
@@ -599,6 +1095,7 @@ const TEMPLATES = {
     const A = appendAlertToAssessment("ITU BAIXA NAO COMPLICADA.", common);
     const P = buildPlan(p, common, [
       "ORIENTADA HIDRATACAO ABUNDANTE E ESVAZIAMENTO REGULAR DA BEXIGA.",
+      "ATB.",
     ]);
     return composeSoap({ S, O, A, P });
   },
@@ -696,25 +1193,48 @@ const TEMPLATES = {
       adminLines.push(`MEDICACAO: ${med}.`);
       adminLines.push(`${status}.`);
     }
+    if (option?.key === "solicitacao_exames") {
+      const exames =
+        p.adminExames?.trim().toUpperCase() || "EXAMES NAO ESPECIFICADOS";
+      adminLines.push(`EXAMES: ${exames}.`);
+    }
+    if (option?.key === "encaminhamento_eletivo") {
+      const esp =
+        p.adminEspecialidade?.trim().toUpperCase() ||
+        "ESPECIALIDADE NAO ESPECIFICADA";
+      adminLines.push(`ESPECIALIDADE: ${esp}.`);
+    }
     const S = adminLines.join(" \n");
     const O = [
       common.telemed,
       "DEMANDA ADMINISTRATIVA, SEM QUEIXAS CLINICAS DISCUTIDAS.",
     ].filter(Boolean)
       .join(" \n");
-    const A = "DEMANDA ADMINISTRATIVA CONFORME SOLICITACAO.";
+    const baseA = "DEMANDA ADMINISTRATIVA CONFORME SOLICITACAO.";
+    const A = common.cid ? `${baseA} ${common.cid}` : baseA;
     const planLines = ["ORIENTO FLUXO ELETIVO."];
     if (option?.key === "renovacao_receita" && p.adminRenova) {
       planLines.unshift(
         "RENOVO RECEITA PARA 1X MES ATE PROXIMA CONSULTA ELETIVA."
       );
     }
-    const P = [
-      ...planLines,
-      common.atestado,
-      common.cid,
-      common.observacoes,
-    ]
+    if (option?.key === "solicitacao_exames") {
+      const exames = p.adminExames?.trim().toUpperCase();
+      planLines.unshift(
+        exames
+          ? `SOLICITO EXAMES: ${exames}.`
+          : "SOLICITO EXAMES ELETIVOS CONFORME ANEXO."
+      );
+    }
+    if (option?.key === "encaminhamento_eletivo") {
+      const esp = p.adminEspecialidade?.trim().toUpperCase();
+      planLines.unshift(
+        esp
+          ? `ENCAMINHO ELETIVAMENTE PARA ${esp}.`
+          : "ENCAMINHO ELETIVAMENTE PARA ESPECIALIDADE CONFORME ANEXO."
+      );
+    }
+    const P = [...planLines, common.atestado, common.observacoes]
       .filter(Boolean)
       .join(" \n");
     return composeSoap({ S, O, A, P });
@@ -863,6 +1383,326 @@ const runTests = () => {
     details: "",
   });
 
+  const sampleSummary = [
+    "HISTORICO MEDICO",
+    "diabetes",
+    "",
+    "RESUMO DA QUEIXA",
+    "Paciente apresenta sintomas gripais ha 2 dias, incluindo tosse, febre e dor de cabeca.",
+    "",
+    "SINTOMAS",
+    "tosse febre dor de cabeca",
+    "",
+    "INICIO / DURACAO",
+    "2 dias",
+    "",
+    "CID SUGERIDO",
+    "J00 - Resfriado comum",
+    "",
+    "CONDUTA FARMACOLOGICA SUGERIDA",
+    "Paracetamol para alivio da febre e dor.",
+    "",
+    "CONDUTA NAO FARMACOLOGICA SUGERIDA",
+    "Repouso e hidratacao oral abundante.",
+  ].join("\n");
+  const parsed = parseAiSummary(sampleSummary);
+  const mappedFromSummary = mapSummaryToParams(parsed, buildDefaultParams());
+  const summaryOutput = TEMPLATES[mappedFromSummary.cond](
+    templateParams(mappedFromSummary)
+  );
+  results.push({
+    name: "Parser do resumo IA mapeia CID, sintomas, comorbidades e atestado padrao",
+    passed:
+      mappedFromSummary.cond === "IVAS" &&
+      mappedFromSummary.cid === "J00" &&
+      mappedFromSummary.symptomStates?.tosse === "present" &&
+      mappedFromSummary.symptomStates?.febre === "present" &&
+      mappedFromSummary.symptomStates?.cefaleia === "present" &&
+      mappedFromSummary.symptomStates?.congestao === "absent" &&
+      mappedFromSummary.comorbTexto?.toLowerCase().includes("diabetes") &&
+      mappedFromSummary.atestadoDias === "1" &&
+      summaryOutput.includes("COMORBIDADES: DIABETES.") &&
+      summaryOutput.includes("ATESTADO: 1 DIA.") &&
+      summaryOutput.includes("CID-10: J00.") &&
+      summaryOutput.includes("NEGA SINAIS DE ALERTA"),
+    details: "",
+  });
+
+  const sampleJson = JSON.stringify({
+    historico_medico: "diabetes",
+    resumo_queixa: "Sintomas gripais ha 2 dias.",
+    sintomas: ["tosse", "febre", "dor de cabeca"],
+    inicio_duracao: "2 dias",
+    sinais_alarme: [],
+    cid_sugerido: { code: "J00", label: "Resfriado comum" },
+    conduta_farmacologica: "Paracetamol para alivio da febre e dor.",
+    conduta_nao_farmacologica: "Repouso e hidratacao oral abundante.",
+  });
+  const parsedJson = parseAiSummary(sampleJson);
+  const mappedFromJson = mapSummaryToParams(parsedJson, buildDefaultParams());
+  const jsonOutput = TEMPLATES[mappedFromJson.cond](templateParams(mappedFromJson));
+  results.push({
+    name: "Parser aceita JSON com schema AiSummary",
+    passed:
+      mappedFromJson.cond === "IVAS" &&
+      mappedFromJson.cid === "J00" &&
+      mappedFromJson.symptomStates?.tosse === "present" &&
+      mappedFromJson.symptomStates?.cefaleia === "present" &&
+      mappedFromJson.comorbTexto?.toLowerCase().includes("diabetes") &&
+      jsonOutput.includes("COMORBIDADES: DIABETES.") &&
+      jsonOutput.includes("ATESTADO: 1 DIA.") &&
+      jsonOutput.includes("NEGA SINAIS DE ALERTA"),
+    details: "",
+  });
+
+  const sampleJsonAlert = JSON.stringify({
+    cid_sugerido: { code: "J00", label: "Resfriado comum" },
+    sintomas: ["tosse"],
+    sinais_alarme: ["dispneia intensa"],
+  });
+  const mappedAlert = mapSummaryToParams(
+    parseAiSummary(sampleJsonAlert),
+    buildDefaultParams()
+  );
+  const alertOutput = TEMPLATES[mappedAlert.cond](templateParams(mappedAlert));
+  results.push({
+    name: "JSON com sinais_alarme nao-vazio gera encaminhamento ao PS",
+    passed:
+      mappedAlert.alertStates?.dispneia_intensa === "present" &&
+      alertOutput.includes("CRITERIOS DE GRAVIDADE PRESENTES") &&
+      alertOutput.includes("ENCAMINHADO AO PRONTO SOCORRO"),
+    details: "",
+  });
+
+  const nonCanonicalAlarm = JSON.stringify({
+    cid_sugerido: { code: "J00", label: "Resfriado comum" },
+    sintomas: ["tosse"],
+    sinais_alarme: ["dispneia"],
+  });
+  const mappedNonCanon = mapSummaryToParams(
+    parseAiSummary(nonCanonicalAlarm),
+    buildDefaultParams()
+  );
+  const nonCanonOutput = TEMPLATES[mappedNonCanon.cond](
+    templateParams(mappedNonCanon)
+  );
+  results.push({
+    name: "P1: sinais_alarme nao-canonico ainda forca encaminhamento ao PS",
+    passed:
+      mappedNonCanon.extraAlertText?.toLowerCase().includes("dispneia") &&
+      nonCanonOutput.includes("CRITERIOS DE GRAVIDADE PRESENTES") &&
+      nonCanonOutput.includes("ENCAMINHADO AO PRONTO SOCORRO") &&
+      !nonCanonOutput.includes("NEGA SINAIS DE ALERTA"),
+    details: "",
+  });
+
+  const unsupportedCidJson = JSON.stringify({
+    cid_sugerido: { code: "R51.9", label: "Cefaleia, NE" },
+    sintomas: ["dor de cabeca"],
+  });
+  const mappedUnsupported = mapSummaryToParams(
+    parseAiSummary(unsupportedCidJson),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P1: CID nao mapeado nao cai em IVAS - sinaliza unsupportedCid",
+    passed:
+      mappedUnsupported.unsupportedCid === "R51.9" &&
+      mappedUnsupported.cond === "IVAS",
+    details: "",
+  });
+
+  const inlineHeaders = [
+    "HISTORICO MEDICO: diabetes",
+    "SINTOMAS: tosse, febre, dor de cabeca",
+    "INICIO / DURACAO: 2 dias",
+    "CID SUGERIDO: J00 - Resfriado comum",
+  ].join("\n");
+  const inlineParsed = parseAiSummary(inlineHeaders);
+  results.push({
+    name: "P2: parser aceita header com valor inline (HEADER: valor)",
+    passed:
+      inlineParsed.historico === "diabetes" &&
+      inlineParsed.sintomas?.includes("tosse") &&
+      inlineParsed.duracao === "2 dias" &&
+      inlineParsed.cid?.includes("J00"),
+    details: "",
+  });
+
+  const renovacaoSummary = JSON.stringify({
+    tipo_demanda: "renovacao_receita",
+    medicacao: "losartana 50mg",
+  });
+  const mappedRenov = mapSummaryToParams(
+    parseAiSummary(renovacaoSummary),
+    buildDefaultParams()
+  );
+  const renovOutput = TEMPLATES[mappedRenov.cond](
+    templateParams(mappedRenov)
+  );
+  results.push({
+    name: "Admin: renovacao de receita via tipo_demanda",
+    passed:
+      mappedRenov.cond === "ADMIN" &&
+      mappedRenov.administrativoTipo === "renovacao_receita" &&
+      mappedRenov.adminMedicacao === "losartana 50mg" &&
+      renovOutput.includes("ADMINISTRATIVO: RENOVACAO DE RECEITA") &&
+      renovOutput.includes("MEDICACAO: LOSARTANA 50MG.") &&
+      renovOutput.includes("RENOVO RECEITA PARA 1X MES"),
+    details: "",
+  });
+
+  const examesSummary = JSON.stringify({
+    tipo_demanda: "solicitacao_exames",
+    exames_solicitados: ["hemograma completo", "TSH"],
+  });
+  const mappedExames = mapSummaryToParams(
+    parseAiSummary(examesSummary),
+    buildDefaultParams()
+  );
+  const examesOutput = TEMPLATES[mappedExames.cond](
+    templateParams(mappedExames)
+  );
+  results.push({
+    name: "Admin: solicitacao de exames via tipo_demanda",
+    passed:
+      mappedExames.cond === "ADMIN" &&
+      mappedExames.administrativoTipo === "solicitacao_exames" &&
+      mappedExames.adminExames?.toLowerCase().includes("hemograma") &&
+      examesOutput.includes("ADMINISTRATIVO: SOLICITACAO DE EXAMES") &&
+      examesOutput.includes("SOLICITO EXAMES: HEMOGRAMA COMPLETO, TSH"),
+    details: "",
+  });
+
+  const encaminhamentoSummary = JSON.stringify({
+    tipo_demanda: "encaminhamento_eletivo",
+    encaminhamento_especialidade: "cardiologia",
+  });
+  const mappedEnc = mapSummaryToParams(
+    parseAiSummary(encaminhamentoSummary),
+    buildDefaultParams()
+  );
+  const encOutput = TEMPLATES[mappedEnc.cond](templateParams(mappedEnc));
+  results.push({
+    name: "Admin: encaminhamento eletivo via tipo_demanda",
+    passed:
+      mappedEnc.cond === "ADMIN" &&
+      mappedEnc.administrativoTipo === "encaminhamento_eletivo" &&
+      mappedEnc.adminEspecialidade === "cardiologia" &&
+      encOutput.includes("ADMINISTRATIVO: ENCAMINHAMENTO ELETIVO") &&
+      encOutput.includes("ESPECIALIDADE: CARDIOLOGIA.") &&
+      encOutput.includes("ENCAMINHO ELETIVAMENTE PARA CARDIOLOGIA"),
+    details: "",
+  });
+
+  const negatedSymptom = JSON.stringify({
+    cid_sugerido: { code: "J00", label: "Resfriado" },
+    sintomas: ["tosse"],
+    resumo_queixa: "tosse ha 2 dias, sem febre",
+  });
+  const mappedNeg = mapSummaryToParams(
+    parseAiSummary(negatedSymptom),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P1 Codex: sintoma negado em queixa nao marca como present",
+    passed:
+      mappedNeg.symptomStates?.tosse === "present" &&
+      mappedNeg.symptomStates?.febre === "absent",
+    details: "",
+  });
+
+  const zeroAtestado = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "J00", label: "Resfriado" },
+        sintomas: ["tosse"],
+      })
+    ),
+    { ...buildDefaultParams(), atestadoDias: "0" }
+  );
+  results.push({
+    name: "P2 Codex: atestado 0 explicito preservado",
+    passed: zeroAtestado.atestadoDias === "0",
+    details: "",
+  });
+
+  const semanaDuration = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "J00", label: "Resfriado" },
+        inicio_duracao: "1 semana",
+      })
+    ),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P2 Codex: duracao em semanas convertida para dias",
+    passed: semanaDuration.duracaoDias === "7",
+    details: "",
+  });
+
+  const horasDuration = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "J00", label: "Resfriado" },
+        inicio_duracao: "12 horas",
+      })
+    ),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P2 Codex: duracao em horas mapeia para 0 (menos de um dia)",
+    passed: horasDuration.duracaoDias === "0",
+    details: "",
+  });
+
+  const allergyInHistorico = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "J00", label: "Resfriado" },
+        sintomas: ["tosse"],
+        alergias: "alergia a dipirona",
+      })
+    ),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P1 Codex: alergias separadas de comorbidades",
+    passed:
+      allergyInHistorico.semAlergias === false &&
+      allergyInHistorico.alergiasTexto?.toLowerCase().includes("dipirona") &&
+      allergyInHistorico.semComorb === true,
+    details: "",
+  });
+
+  const lowercaseCid = mapSummaryToParams(
+    parseAiSummary(JSON.stringify({ cid_sugerido: { code: "a09", label: "GECA" } })),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P2 Codex: CID em minuscula normalizado e mapeado",
+    passed: lowercaseCid.cond === "GECA" && lowercaseCid.cid === "A09",
+    details: "",
+  });
+
+  const adminWithAtestado = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        tipo_demanda: "renovacao_receita",
+        medicacao: "losartana",
+      })
+    ),
+    { ...buildDefaultParams(), atestadoDias: "2" }
+  );
+  results.push({
+    name: "P2 Codex: admin preserva atestado quando usuario digita valor",
+    passed:
+      adminWithAtestado.cond === "ADMIN" &&
+      adminWithAtestado.atestadoDias === "2",
+    details: "",
+  });
+
   const conjuntivitePlan = TEMPLATES.CONJUNTIVITE(
     templateParams({
       cond: "CONJUNTIVITE",
@@ -884,6 +1724,19 @@ export default function SoapGeneratorPT() {
   const [output, setOutput] = useState("");
   const [tests, setTests] = useState([]);
   const [copyState, setCopyState] = useState("copiar");
+  const [mode, setMode] = useState("parametric");
+  const [summaryText, setSummaryText] = useState("");
+  const [summaryAtestadoDias, setSummaryAtestadoDias] = useState("1");
+  const [summaryTelemed, setSummaryTelemed] = useState(true);
+  const [summaryError, setSummaryError] = useState("");
+  const [summaryPreview, setSummaryPreview] = useState(null);
+  const [aiMotivo, setAiMotivo] = useState("");
+  const [aiHistorico, setAiHistorico] = useState("");
+  const [aiIdade, setAiIdade] = useState("");
+  const [aiSexo, setAiSexo] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [soapAiLoading, setSoapAiLoading] = useState(false);
 
   const cidOptions = useMemo(
     () => CID_OPTIONS[params.cond] ?? [],
@@ -910,6 +1763,13 @@ export default function SoapGeneratorPT() {
       ...prev,
       [key]: !prev[key],
     }));
+  };
+
+  const handleModeChange = (next) => {
+    if (next !== "summary") {
+      setParams((prev) => ({ ...prev, extraAlertText: "" }));
+    }
+    setMode(next);
   };
 
   const handleCondChange = (value) => {
@@ -941,6 +1801,7 @@ export default function SoapGeneratorPT() {
         ...prev,
         cond: value,
         cid: newCid,
+        extraAlertText: "",
         symptomStates: buildSymptomState(value),
         alertStates: buildAlertState(value),
         administrativoTipo:
@@ -1022,6 +1883,138 @@ export default function SoapGeneratorPT() {
     setOutput(text);
   };
 
+  const handleGenerateWithAi = async () => {
+    if (!aiMotivo.trim()) {
+      setAiError("Cole o motivo da consulta para gerar com IA.");
+      return;
+    }
+    setAiLoading(true);
+    setAiError("");
+    try {
+      const resp = await fetch("/.netlify/functions/ai-summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          motivo: aiMotivo,
+          historico: aiHistorico,
+          idade: aiIdade,
+          sexo: aiSexo,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setAiError(data?.error || `Falha (${resp.status})`);
+        return;
+      }
+      const summary = data?.summary;
+      if (!summary) {
+        setAiError("Resposta sem summary.");
+        return;
+      }
+      const json = JSON.stringify(summary, null, 2);
+      setSummaryText(json);
+      const sections = parseAiSummary(json);
+      const base = buildDefaultParams();
+      base.telemed = summaryTelemed;
+      base.atestadoDias = summaryAtestadoDias?.toString() || "1";
+      const mapped = mapSummaryToParams(sections, base);
+      if (mapped.unsupportedCid) {
+        setAiError(
+          `CID ${mapped.unsupportedCid} retornado pela IA nao tem template SOAP suportado. Use o modo Parametrico para escolher a condicao manualmente.`
+        );
+        return;
+      }
+      const template = TEMPLATES[mapped.cond];
+      if (!template) {
+        setAiError("Condicao identificada nao suportada.");
+        return;
+      }
+      setSummaryPreview(sections);
+      setSummaryError("");
+      setParams(mapped);
+      setOutput(template(mapped));
+      setMode("summary");
+    } catch (err) {
+      setAiError(`Erro de rede: ${err?.message || err}`);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleGenerateSoapViaGpt = async () => {
+    if (!summaryText.trim()) {
+      setSummaryError("Cole o resumo da IA para gerar via GPT.");
+      setSummaryPreview(null);
+      return;
+    }
+    setSoapAiLoading(true);
+    setSummaryError("");
+    try {
+      const resp = await fetch("/.netlify/functions/ai-soap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          summary: summaryText,
+          atestadoDias: summaryAtestadoDias || "1",
+          telemed: summaryTelemed,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setSummaryError(data?.error || `Falha (${resp.status})`);
+        return;
+      }
+      if (!data?.soap) {
+        setSummaryError("Resposta sem campo soap.");
+        return;
+      }
+      const sections = parseAiSummary(summaryText);
+      setSummaryPreview(sections);
+      setOutput(data.soap);
+    } catch (err) {
+      setSummaryError(`Erro de rede: ${err?.message || err}`);
+    } finally {
+      setSoapAiLoading(false);
+    }
+  };
+
+  const handleGenerateFromSummary = () => {
+    if (!summaryText.trim()) {
+      setSummaryError("Cole o resumo da IA para gerar o SOAP.");
+      setSummaryPreview(null);
+      return;
+    }
+    const sections = parseAiSummary(summaryText);
+    if (!Object.keys(sections).length) {
+      setSummaryError(
+        "Nao foi possivel identificar secoes no texto colado. Verifique o formato."
+      );
+      setSummaryPreview(null);
+      return;
+    }
+    const base = buildDefaultParams();
+    base.telemed = summaryTelemed;
+    base.atestadoDias = summaryAtestadoDias?.toString() || "1";
+    const mapped = mapSummaryToParams(sections, base);
+    if (mapped.unsupportedCid) {
+      setSummaryError(
+        `CID ${mapped.unsupportedCid} nao tem template SOAP suportado neste app. Use o modo Parametrico para escolher a condicao manualmente.`
+      );
+      setSummaryPreview(sections);
+      return;
+    }
+    const template = TEMPLATES[mapped.cond];
+    if (!template) {
+      setSummaryError("Condicao identificada nao suportada.");
+      setSummaryPreview(null);
+      return;
+    }
+    setSummaryError("");
+    setSummaryPreview(sections);
+    setParams(mapped);
+    setOutput(template(mapped));
+  };
+
   const handleCopy = async () => {
     if (!output) return;
     try {
@@ -1083,6 +2076,262 @@ export default function SoapGeneratorPT() {
       <div className="two-column">
         <section className="panel">
           <div className="panel-body">
+            <div className="mode-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === "parametric"}
+                className={`mode-tab ${mode === "parametric" ? "active" : ""}`}
+                onClick={() => handleModeChange("parametric")}
+              >
+                Parametrico
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === "summary"}
+                className={`mode-tab ${mode === "summary" ? "active" : ""}`}
+                onClick={() => handleModeChange("summary")}
+              >
+                Resumo IA
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === "ai"}
+                className={`mode-tab ${mode === "ai" ? "active" : ""}`}
+                onClick={() => handleModeChange("ai")}
+              >
+                Gerar com IA
+              </button>
+            </div>
+
+            {mode === "ai" && (
+              <>
+                <div className="form-grid">
+                  <div className="field field-wide">
+                    <label htmlFor="aiMotivo">Motivo da consulta (texto livre)</label>
+                    <textarea
+                      id="aiMotivo"
+                      placeholder="Ex.: estou gripada ha 2 dias, com tosse, febre e dor de cabeca"
+                      value={aiMotivo}
+                      onChange={(event) => setAiMotivo(event.target.value)}
+                      style={{ minHeight: 120 }}
+                    />
+                  </div>
+
+                  <div className="field field-wide">
+                    <label htmlFor="aiHistorico">Historico medico (opcional)</label>
+                    <textarea
+                      id="aiHistorico"
+                      placeholder="Ex.: diabetes, hipertensao"
+                      value={aiHistorico}
+                      onChange={(event) => setAiHistorico(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="field">
+                    <label htmlFor="aiIdade">Idade (opcional)</label>
+                    <input
+                      id="aiIdade"
+                      type="number"
+                      min="0"
+                      value={aiIdade}
+                      onChange={(event) => setAiIdade(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="field">
+                    <label htmlFor="aiSexo">Sexo (opcional)</label>
+                    <select
+                      id="aiSexo"
+                      value={aiSexo}
+                      onChange={(event) => setAiSexo(event.target.value)}
+                    >
+                      <option value="">Nao informado</option>
+                      <option value="feminino">Feminino</option>
+                      <option value="masculino">Masculino</option>
+                    </select>
+                  </div>
+
+                  <div className="field">
+                    <label htmlFor="aiAtestado">Atestado (dias)</label>
+                    <input
+                      id="aiAtestado"
+                      type="number"
+                      min="0"
+                      value={summaryAtestadoDias}
+                      onChange={(event) => setSummaryAtestadoDias(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="field">
+                    <label>Atendimento</label>
+                    <div className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        id="aiTelemed"
+                        checked={summaryTelemed}
+                        onChange={() => setSummaryTelemed((prev) => !prev)}
+                      />
+                      <label htmlFor="aiTelemed">Via telemedicina</label>
+                    </div>
+                  </div>
+
+                  {aiError && (
+                    <div className="field field-wide">
+                      <small style={{ color: "#b91c1c", fontWeight: 600 }}>
+                        {aiError}
+                      </small>
+                    </div>
+                  )}
+
+                  <div className="field field-wide">
+                    <small>
+                      Chama OpenAI gpt-4o-mini via Netlify Function. Voce precisa
+                      configurar a variavel <code>OPENAI_API_KEY</code> no painel
+                      do Netlify (Site settings - Environment variables). Em
+                      desenvolvimento local, use <code>netlify dev</code> com a
+                      mesma variavel.
+                    </small>
+                  </div>
+                </div>
+
+                <div className="actions">
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={handleGenerateWithAi}
+                    disabled={aiLoading}
+                  >
+                    {aiLoading ? "Gerando..." : "Gerar com IA"}
+                  </button>
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={handleCopy}
+                    disabled={!output}
+                  >
+                    {copyState}
+                  </button>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleDownload}
+                    disabled={!output}
+                  >
+                    Baixar .txt
+                  </button>
+                </div>
+              </>
+            )}
+
+            {mode === "summary" && (
+              <div className="form-grid">
+                <div className="field field-wide">
+                  <label htmlFor="summaryText">Resumo da IA (cole abaixo)</label>
+                  <textarea
+                    id="summaryText"
+                    placeholder={`Ex.: HISTORICO MEDICO\ndiabetes\n\nRESUMO DA QUEIXA\n...\n\nSINTOMAS\ntosse, febre, dor de cabeca\n\nINICIO / DURACAO\n2 dias\n\nCID SUGERIDO\nJ00 - Resfriado comum\n\nCONDUTA FARMACOLOGICA SUGERIDA\nParacetamol...`}
+                    value={summaryText}
+                    onChange={(event) => setSummaryText(event.target.value)}
+                    style={{ minHeight: 220 }}
+                  />
+                  <small>
+                    O parser preenche automaticamente: condicao (via CID), sintomas,
+                    comorbidades, sinais de alerta e conduta. Alergias, comorbidades e
+                    sinais de alerta nao mencionados ficam como NEGA. Atestado fica
+                    ligado por padrao.
+                  </small>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="summaryAtestado">Atestado (dias)</label>
+                  <input
+                    id="summaryAtestado"
+                    type="number"
+                    min="0"
+                    value={summaryAtestadoDias}
+                    onChange={(event) => setSummaryAtestadoDias(event.target.value)}
+                  />
+                </div>
+
+                <div className="field">
+                  <label>Atendimento</label>
+                  <div className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      id="summaryTelemed"
+                      checked={summaryTelemed}
+                      onChange={() => setSummaryTelemed((prev) => !prev)}
+                    />
+                    <label htmlFor="summaryTelemed">Via telemedicina</label>
+                  </div>
+                </div>
+
+                {summaryError && (
+                  <div className="field field-wide">
+                    <small style={{ color: "#b91c1c", fontWeight: 600 }}>
+                      {summaryError}
+                    </small>
+                  </div>
+                )}
+
+                {summaryPreview && (
+                  <div className="field field-wide">
+                    <label>Secoes detectadas</label>
+                    <ul className="summary-preview">
+                      {Object.entries(summaryPreview).map(([key, value]) => (
+                        <li key={key}>
+                          <strong>{key}:</strong> {value.slice(0, 140)}
+                          {value.length > 140 ? "..." : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {mode === "summary" && (
+              <div className="actions">
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={handleGenerateFromSummary}
+                >
+                  Gerar SOAP (templates)
+                </button>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={handleGenerateSoapViaGpt}
+                  disabled={soapAiLoading}
+                  title="Gera o SOAP via gpt-4o-mini. Texto mais natural, custa ~R$ 0,005 por geracao."
+                >
+                  {soapAiLoading ? "Gerando via GPT..." : "Gerar SOAP via GPT"}
+                </button>
+                <button
+                  className="btn secondary"
+                  type="button"
+                  onClick={handleCopy}
+                  disabled={!output}
+                >
+                  {copyState}
+                </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={handleDownload}
+                  disabled={!output}
+                >
+                  Baixar .txt
+                </button>
+              </div>
+            )}
+
+            {mode === "parametric" && (
+            <>
             <div className="form-grid">
               <div className="field">
                 <label>Condicao</label>
@@ -1513,6 +2762,8 @@ export default function SoapGeneratorPT() {
                   </li>
                 ))}
               </ul>
+            )}
+            </>
             )}
           </div>
         </section>

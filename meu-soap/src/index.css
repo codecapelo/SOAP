@@ -90,6 +90,62 @@ body {
   gap: 20px 16px;
 }
 
+.mode-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  background: rgba(37, 99, 235, 0.06);
+  border-radius: var(--radius-medium);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  margin-bottom: 20px;
+}
+
+.mode-tab {
+  flex: 1;
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.mode-tab:hover {
+  color: var(--text-primary);
+}
+
+.mode-tab.active {
+  background: var(--bg-panel);
+  color: var(--accent);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+}
+
+.summary-preview {
+  list-style: none;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #f9fbff;
+  border-radius: var(--radius-medium);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.summary-preview strong {
+  color: var(--text-primary);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  margin-right: 6px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
