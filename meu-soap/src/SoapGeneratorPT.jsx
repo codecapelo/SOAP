@@ -1451,6 +1451,7 @@ export default function SoapGeneratorPT() {
   const [aiSexo, setAiSexo] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [soapAiLoading, setSoapAiLoading] = useState(false);
 
   const cidOptions = useMemo(
     () => CID_OPTIONS[params.cond] ?? [],
@@ -1644,6 +1645,43 @@ export default function SoapGeneratorPT() {
       setAiError(`Erro de rede: ${err?.message || err}`);
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  const handleGenerateSoapViaGpt = async () => {
+    if (!summaryText.trim()) {
+      setSummaryError("Cole o resumo da IA para gerar via GPT.");
+      setSummaryPreview(null);
+      return;
+    }
+    setSoapAiLoading(true);
+    setSummaryError("");
+    try {
+      const resp = await fetch("/.netlify/functions/ai-soap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          summary: summaryText,
+          atestadoDias: summaryAtestadoDias || "1",
+          telemed: summaryTelemed,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setSummaryError(data?.error || `Falha (${resp.status})`);
+        return;
+      }
+      if (!data?.soap) {
+        setSummaryError("Resposta sem campo soap.");
+        return;
+      }
+      const sections = parseAiSummary(summaryText);
+      setSummaryPreview(sections);
+      setOutput(data.soap);
+    } catch (err) {
+      setSummaryError(`Erro de rede: ${err?.message || err}`);
+    } finally {
+      setSoapAiLoading(false);
     }
   };
 
@@ -1969,7 +2007,16 @@ export default function SoapGeneratorPT() {
                   type="button"
                   onClick={handleGenerateFromSummary}
                 >
-                  Gerar SOAP a partir do resumo
+                  Gerar SOAP (templates)
+                </button>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={handleGenerateSoapViaGpt}
+                  disabled={soapAiLoading}
+                  title="Gera o SOAP via gpt-4o-mini. Texto mais natural, custa ~R$ 0,005 por geracao."
+                >
+                  {soapAiLoading ? "Gerando via GPT..." : "Gerar SOAP via GPT"}
                 </button>
                 <button
                   className="btn secondary"
