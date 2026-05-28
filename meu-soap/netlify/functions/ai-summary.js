@@ -4,6 +4,7 @@ Receba o motivo da consulta (texto livre do paciente) e o historico medico (opci
 
 {
   "historico_medico": string,
+  "alergias": string,
   "resumo_queixa": string,
   "sintomas": string[],
   "inicio_duracao": string,
@@ -23,6 +24,8 @@ Regras:
 - "sinais_alarme" deve listar apenas sinais de alerta que o paciente mencionou claramente. Vazio [] se nenhum.
 - "cid_sugerido" deve ser o CID-10 mais provavel para o quadro descrito (ex: J00, J06.9, A09, M54.5, G43.9, N30.0). Se for demanda administrativa pura sem queixa clinica, deixe vazio.
 - "inicio_duracao" exemplos: "2 dias", "1 semana", "hoje", "12 horas".
+- "alergias": se o paciente ou historico mencionar alergia medicamentosa/alimentar, extraia AQUI (ex: "alergia a dipirona"). NAO coloque em historico_medico nem comorbidades. Se o paciente nega alergias, deixe vazio.
+- "historico_medico" e SO para comorbidades cronicas (DM, HAS, asma, etc), NUNCA inclui alergias.
 
 DEMANDA ADMINISTRATIVA:
 - Se o motivo for puramente administrativo (sem queixa clinica), preencha "tipo_demanda" com um dos 3 valores: "renovacao_receita", "solicitacao_exames", "encaminhamento_eletivo".

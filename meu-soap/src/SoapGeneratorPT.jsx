@@ -806,9 +806,14 @@ const parseAiSummary = (raw) => {
 
 const extractDuration = (text) => {
   if (!text) return null;
-  const match = text.match(/(\d+)\s*(?:dias?|d)\b/i);
-  if (match) return match[1];
-  const lower = stripAccents(text);
+  const lower = stripAccents(text).toLowerCase();
+  const days = lower.match(/(\d+)\s*(?:dias?|d)\b/);
+  if (days) return days[1];
+  const weeks = lower.match(/(\d+)\s*(?:semanas?|sem)\b/);
+  if (weeks) return String(parseInt(weeks[1], 10) * 7);
+  const months = lower.match(/(\d+)\s*(?:meses?|mes)\b/);
+  if (months) return String(parseInt(months[1], 10) * 30);
+  if (/(\d+)\s*(?:horas?|h)\b/.test(lower)) return "0";
   if (/hoje|hj|menos de um dia|ultimas 24/.test(lower)) return "0";
   return null;
 };
@@ -942,23 +947,32 @@ const mapSummaryToParams = (sections, baseParams) => {
   const dur = extractDuration(durationText);
   if (dur !== null) params.duracaoDias = dur;
 
-  const blob = [
-    sections.sintomas,
-    sections.queixa,
-    sections.resumoClinico,
-    sections.motivo,
-  ]
-    .filter(Boolean)
-    .map(stripAccents)
-    .join(" ");
+  const positiveBlob = sections.sintomas
+    ? stripAccents(sections.sintomas)
+    : [sections.queixa, sections.resumoClinico, sections.motivo]
+        .filter(Boolean)
+        .map(stripAccents)
+        .join(" ");
+
+  const isNegatedAt = (text, idx) => {
+    const window = text.slice(Math.max(0, idx - 25), idx);
+    return /\b(sem|nega|nao\s+(tem|apresenta|relata)|negativo\s+para)\s+[a-z\s]*$/i.test(
+      window
+    );
+  };
 
   (SYMPTOM_OPTIONS[params.cond] ?? []).forEach((opt) => {
     const variations = [
       stripAccents(opt.label),
       ...(SYMPTOM_SYNONYMS[opt.key] ?? []).map(stripAccents),
     ];
-    if (variations.some((token) => token && blob.includes(token))) {
-      params.symptomStates[opt.key] = "present";
+    for (const token of variations) {
+      if (!token) continue;
+      const idx = positiveBlob.indexOf(token);
+      if (idx !== -1 && !isNegatedAt(positiveBlob, idx)) {
+        params.symptomStates[opt.key] = "present";
+        break;
+      }
     }
   });
 
@@ -1004,7 +1018,7 @@ const mapSummaryToParams = (sections, baseParams) => {
   params.includeAntibiotico = false;
   params.antibioticoTexto = "";
 
-  if (!params.atestadoDias || params.atestadoDias === "0") {
+  if (params.atestadoDias === undefined || params.atestadoDias === null || params.atestadoDias === "") {
     params.atestadoDias = "1";
   }
 
@@ -1577,6 +1591,87 @@ const runTests = () => {
     details: "",
   });
 
+  const negatedSymptom = JSON.stringify({
+    cid_sugerido: { code: "J00", label: "Resfriado" },
+    sintomas: ["tosse"],
+    resumo_queixa: "tosse ha 2 dias, sem febre",
+  });
+  const mappedNeg = mapSummaryToParams(
+    parseAiSummary(negatedSymptom),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P1 Codex: sintoma negado em queixa nao marca como present",
+    passed:
+      mappedNeg.symptomStates?.tosse === "present" &&
+      mappedNeg.symptomStates?.febre === "absent",
+    details: "",
+  });
+
+  const zeroAtestado = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "J00", label: "Resfriado" },
+        sintomas: ["tosse"],
+      })
+    ),
+    { ...buildDefaultParams(), atestadoDias: "0" }
+  );
+  results.push({
+    name: "P2 Codex: atestado 0 explicito preservado",
+    passed: zeroAtestado.atestadoDias === "0",
+    details: "",
+  });
+
+  const semanaDuration = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "J00", label: "Resfriado" },
+        inicio_duracao: "1 semana",
+      })
+    ),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P2 Codex: duracao em semanas convertida para dias",
+    passed: semanaDuration.duracaoDias === "7",
+    details: "",
+  });
+
+  const horasDuration = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "J00", label: "Resfriado" },
+        inicio_duracao: "12 horas",
+      })
+    ),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P2 Codex: duracao em horas mapeia para 0 (menos de um dia)",
+    passed: horasDuration.duracaoDias === "0",
+    details: "",
+  });
+
+  const allergyInHistorico = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "J00", label: "Resfriado" },
+        sintomas: ["tosse"],
+        alergias: "alergia a dipirona",
+      })
+    ),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "P1 Codex: alergias separadas de comorbidades",
+    passed:
+      allergyInHistorico.semAlergias === false &&
+      allergyInHistorico.alergiasTexto?.toLowerCase().includes("dipirona") &&
+      allergyInHistorico.semComorb === true,
+    details: "",
+  });
+
   const conjuntivitePlan = TEMPLATES.CONJUNTIVITE(
     templateParams({
       cond: "CONJUNTIVITE",
@@ -1639,6 +1734,13 @@ export default function SoapGeneratorPT() {
     }));
   };
 
+  const handleModeChange = (next) => {
+    if (next !== "summary") {
+      setParams((prev) => ({ ...prev, extraAlertText: "" }));
+    }
+    setMode(next);
+  };
+
   const handleCondChange = (value) => {
     const newCid = CID_OPTIONS[value]?.[0]?.code ?? "";
     setParams((prev) => {
@@ -1668,6 +1770,7 @@ export default function SoapGeneratorPT() {
         ...prev,
         cond: value,
         cid: newCid,
+        extraAlertText: "",
         symptomStates: buildSymptomState(value),
         alertStates: buildAlertState(value),
         administrativoTipo:
@@ -1948,7 +2051,7 @@ export default function SoapGeneratorPT() {
                 role="tab"
                 aria-selected={mode === "parametric"}
                 className={`mode-tab ${mode === "parametric" ? "active" : ""}`}
-                onClick={() => setMode("parametric")}
+                onClick={() => handleModeChange("parametric")}
               >
                 Parametrico
               </button>
@@ -1957,7 +2060,7 @@ export default function SoapGeneratorPT() {
                 role="tab"
                 aria-selected={mode === "summary"}
                 className={`mode-tab ${mode === "summary" ? "active" : ""}`}
-                onClick={() => setMode("summary")}
+                onClick={() => handleModeChange("summary")}
               >
                 Resumo IA
               </button>
@@ -1966,7 +2069,7 @@ export default function SoapGeneratorPT() {
                 role="tab"
                 aria-selected={mode === "ai"}
                 className={`mode-tab ${mode === "ai" ? "active" : ""}`}
-                onClick={() => setMode("ai")}
+                onClick={() => handleModeChange("ai")}
               >
                 Gerar com IA
               </button>
