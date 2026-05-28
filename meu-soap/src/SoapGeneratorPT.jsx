@@ -1008,6 +1008,7 @@ const TEMPLATES = {
     const A = appendAlertToAssessment("ITU BAIXA NAO COMPLICADA.", common);
     const P = buildPlan(p, common, [
       "ORIENTADA HIDRATACAO ABUNDANTE E ESVAZIAMENTO REGULAR DA BEXIGA.",
+      "ATB.",
     ]);
     return composeSoap({ S, O, A, P });
   },
