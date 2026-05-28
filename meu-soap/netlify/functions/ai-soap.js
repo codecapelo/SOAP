@@ -27,15 +27,15 @@ REGRAS:
 
 3. Bloco O comeca com "ATENDIMENTO VIA TELEMEDICINA." ou "ATENDIMENTO PRESENCIAL." conforme o parametro telemed, seguido de exame fisico generico de telemedicina: "PACIENTE EM BOM ESTADO GERAL, FALA COM CLAREZA, HIDRATADO, AFEBRIL NO MOMENTO (REFERIDO PELO PACIENTE), SEM SINAIS DE DESCONFORTO RESPIRATORIO OU ALTERACAO NEUROLOGICA APARENTE."
 
-4. Bloco A: hipotese diagnostica curta. Se sinal de alarme presente, adicione "SINAIS DE ALERTA IDENTIFICADOS NA AVALIACAO".
+4. Bloco A: hipotese diagnostica curta seguida do CID-10 quando disponivel (formato: "<DIAGNOSTICO>. CID-10: <CODE>."). Se sinal de alarme presente, adicione "SINAIS DE ALERTA IDENTIFICADOS NA AVALIACAO" entre o diagnostico e o CID. O CID NAO entra no bloco P.
 
 5. Bloco P:
    - NUNCA inclua nome de medicamento, dose, posologia ou frequencia (isso vai na receita separada).
+   - NUNCA inclua o CID no bloco P (ele esta no bloco A).
    - Use "- SINTOMATICOS CONFORME NECESSIDADE" ou parafrase a conduta_nao_farmacologica do resumo.
    - SEMPRE adicione: "ORIENTADO SOBRE SINAIS DE RISCO (<lista dos sinais>). EM CASO DE QUALQUER UM, PROCURAR PRONTO SOCORRO PRESENCIAL IMEDIATAMENTE."
    - Adicione "ATESTADO: <N> DIA(S)." conforme parametro.
-   - Adicione "CID-10: <code>." se houver CID no resumo.
-   - Se sinal de alarme presente: substitua todo o plan por "ENCAMINHADO AO PRONTO SOCORRO PRESENCIAL PARA MELHOR AVALIACAO DEVIDO AO SINAL DE ALERTA RELATADO." seguido de CID e atestado.
+   - Se sinal de alarme presente: substitua todo o plan por "ENCAMINHADO AO PRONTO SOCORRO PRESENCIAL PARA MELHOR AVALIACAO DEVIDO AO SINAL DE ALERTA RELATADO." seguido apenas do atestado.
 
 Retorne APENAS um JSON valido no formato: {"soap": "S\\n...\\n\\nO\\n...\\n\\nA\\n...\\n\\nP\\n..."}.
 `;

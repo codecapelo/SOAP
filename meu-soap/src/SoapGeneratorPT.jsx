@@ -429,10 +429,12 @@ const baseCommon = (p) => ({
   hasAlert: hasAlertPositive(p),
 });
 
-const appendAlertToAssessment = (baseText, common) =>
-  common.hasAlert
+const appendAlertToAssessment = (baseText, common) => {
+  const withAlert = common.hasAlert
     ? `${baseText} SINAIS DE ALERTA IDENTIFICADOS NA AVALIACAO.`
     : baseText;
+  return common.cid ? `${withAlert} ${common.cid}` : withAlert;
+};
 
 const buildSubjective = (p, common, detailLines = []) => {
   const symptoms = formatSymptoms(p);
@@ -501,7 +503,6 @@ const buildPlan = (p, common, extraLines = []) => {
     return [
       "ENCAMINHADO AO PRONTO SOCORRO PRESENCIAL PARA MELHOR AVALIACAO DEVIDO AO SINAL DE ALERTA RELATADO.",
       adjustedAtestado,
-      common.cid,
       common.observacoes,
     ]
       .filter(Boolean)
@@ -534,7 +535,7 @@ const buildPlan = (p, common, extraLines = []) => {
     );
   }
 
-  lines.push(adjustedAtestado, common.cid, common.observacoes);
+  lines.push(adjustedAtestado, common.observacoes);
 
   return lines.filter(Boolean).join(" \n");
 };
@@ -1112,19 +1113,15 @@ const TEMPLATES = {
       "DEMANDA ADMINISTRATIVA, SEM QUEIXAS CLINICAS DISCUTIDAS.",
     ].filter(Boolean)
       .join(" \n");
-    const A = "DEMANDA ADMINISTRATIVA CONFORME SOLICITACAO.";
+    const baseA = "DEMANDA ADMINISTRATIVA CONFORME SOLICITACAO.";
+    const A = common.cid ? `${baseA} ${common.cid}` : baseA;
     const planLines = ["ORIENTO FLUXO ELETIVO."];
     if (option?.key === "renovacao_receita" && p.adminRenova) {
       planLines.unshift(
         "RENOVO RECEITA PARA 1X MES ATE PROXIMA CONSULTA ELETIVA."
       );
     }
-    const P = [
-      ...planLines,
-      common.atestado,
-      common.cid,
-      common.observacoes,
-    ]
+    const P = [...planLines, common.atestado, common.observacoes]
       .filter(Boolean)
       .join(" \n");
     return composeSoap({ S, O, A, P });
