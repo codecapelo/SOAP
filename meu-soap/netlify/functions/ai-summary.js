@@ -10,15 +10,27 @@ Receba o motivo da consulta (texto livre do paciente) e o historico medico (opci
   "sinais_alarme": string[],
   "cid_sugerido": { "code": string, "label": string },
   "conduta_farmacologica": string,
-  "conduta_nao_farmacologica": string
+  "conduta_nao_farmacologica": string,
+  "tipo_demanda": "" | "renovacao_receita" | "solicitacao_exames" | "encaminhamento_eletivo",
+  "medicacao": string,
+  "exames_solicitados": string[],
+  "encaminhamento_especialidade": string
 }
 
 Regras:
 - Use portugues brasileiro sem acentos no campo "sintomas" (ex: "tosse", "febre", "dor de cabeca", "odinofagia", "cefaleia").
 - NAO invente sintomas, sinais de alarme ou diagnostico que o paciente nao mencionou.
 - "sinais_alarme" deve listar apenas sinais de alerta que o paciente mencionou claramente. Vazio [] se nenhum.
-- "cid_sugerido" deve ser o CID-10 mais provavel para o quadro descrito (ex: J00, J06.9, A09, M54.5, G43.9, N30.0).
+- "cid_sugerido" deve ser o CID-10 mais provavel para o quadro descrito (ex: J00, J06.9, A09, M54.5, G43.9, N30.0). Se for demanda administrativa pura sem queixa clinica, deixe vazio.
 - "inicio_duracao" exemplos: "2 dias", "1 semana", "hoje", "12 horas".
+
+DEMANDA ADMINISTRATIVA:
+- Se o motivo for puramente administrativo (sem queixa clinica), preencha "tipo_demanda" com um dos 3 valores: "renovacao_receita", "solicitacao_exames", "encaminhamento_eletivo".
+- Para "renovacao_receita": preencha "medicacao" com o nome + dose se mencionada (ex: "losartana 50mg").
+- Para "solicitacao_exames": preencha "exames_solicitados" com a lista (ex: ["hemograma", "TSH"]).
+- Para "encaminhamento_eletivo": preencha "encaminhamento_especialidade" com a especialidade (ex: "cardiologia").
+- Quando "tipo_demanda" estiver preenchido, deixe sintomas, sinais_alarme, condutas e CID vazios - nao invente quadro clinico.
+
 - Se um campo nao tem informacao, retorne string vazia ou array vazio (nao omita o campo).
 - Resposta DEVE ser JSON puro, sem markdown fence.`;
 

@@ -14,6 +14,22 @@ A
 P
 <plano/conduta>
 
+SE o resumo tiver "tipo_demanda" preenchido (demanda administrativa), gere um SOAP simplificado:
+- S:
+  - Para "renovacao_receita": "ADMINISTRATIVO: RENOVACAO DE RECEITA. MEDICACAO: <NOME>. RENOVACAO SOLICITADA."
+  - Para "solicitacao_exames": "ADMINISTRATIVO: SOLICITACAO DE EXAMES. EXAMES: <LISTA>."
+  - Para "encaminhamento_eletivo": "ADMINISTRATIVO: ENCAMINHAMENTO ELETIVO. ESPECIALIDADE: <NOME>."
+- O: "ATENDIMENTO VIA TELEMEDICINA. DEMANDA ADMINISTRATIVA, SEM QUEIXAS CLINICAS DISCUTIDAS." (ou PRESENCIAL).
+- A: "DEMANDA ADMINISTRATIVA CONFORME SOLICITACAO."
+- P:
+  - "renovacao_receita": "RENOVO RECEITA PARA 1X MES ATE PROXIMA CONSULTA ELETIVA. ORIENTO FLUXO ELETIVO." + atestado (se aplicavel).
+  - "solicitacao_exames": "SOLICITO EXAMES: <LISTA>. ORIENTO FLUXO ELETIVO." + atestado (se aplicavel).
+  - "encaminhamento_eletivo": "ENCAMINHO ELETIVAMENTE PARA <ESPECIALIDADE>. ORIENTO FLUXO ELETIVO." + atestado (se aplicavel).
+- NAO mencione sinais de alerta, sintomas ou hipotese clinica nesse fluxo.
+- CID no bloco A apenas se vier explicitamente no resumo.
+
+CASO CLINICO NORMAL (tipo_demanda vazio):
+
 REGRAS:
 1. TODO o texto em CAIXA ALTA, SEM acentos (ex: "INFECCAO", nao "INFECÇÃO").
 2. Bloco S deve conter:

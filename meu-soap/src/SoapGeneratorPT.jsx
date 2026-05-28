@@ -221,6 +221,8 @@ const buildDefaultParams = () => {
     enxaquecaLateralidade: "unilateral",
     adminMedicacao: "",
     adminRenova: true,
+    adminExames: "",
+    adminEspecialidade: "",
   };
 };
 
@@ -624,6 +626,10 @@ const SUMMARY_SECTIONS = [
   },
   { aliases: ["anexos do paciente", "anexos do paciente pdf"], key: "anexos" },
   { aliases: ["motivo da consulta"], key: "motivo" },
+  { aliases: ["tipo de demanda", "demanda administrativa", "demanda"], key: "tipoDemanda" },
+  { aliases: ["medicacao", "medicamento"], key: "medicacao" },
+  { aliases: ["exames solicitados", "exames"], key: "examesSolicitados" },
+  { aliases: ["encaminhamento", "especialidade", "encaminhamento especialidade"], key: "especialidade" },
   { aliases: ["informacoes organizadas por ia"], key: "ignore" },
 ];
 
@@ -709,6 +715,14 @@ const JSON_FIELD_MAP = {
   motivo: ["motivo_consulta", "motivo_da_consulta", "motivo"],
   alergias: ["alergias", "allergies"],
   comorbidades: ["comorbidades", "comorb"],
+  tipoDemanda: ["tipo_demanda", "demanda_administrativa", "demanda"],
+  medicacao: ["medicacao", "medicamento"],
+  examesSolicitados: ["exames_solicitados", "exames"],
+  especialidade: [
+    "encaminhamento_especialidade",
+    "especialidade",
+    "encaminhamento",
+  ],
 };
 
 const pickField = (obj, keys) => {
@@ -817,8 +831,62 @@ const hasNegativeMark = (text) => {
   );
 };
 
+const ADMIN_TYPE_MAP = {
+  renovacao_receita: "renovacao_receita",
+  renovacao: "renovacao_receita",
+  renovacao_de_receita: "renovacao_receita",
+  receita: "renovacao_receita",
+  solicitacao_exames: "solicitacao_exames",
+  solicitacao_de_exames: "solicitacao_exames",
+  exames: "solicitacao_exames",
+  exames_eletivos: "solicitacao_exames",
+  encaminhamento_eletivo: "encaminhamento_eletivo",
+  encaminhamento: "encaminhamento_eletivo",
+};
+
+const resolveAdminType = (raw) => {
+  if (!raw) return null;
+  const norm = stripAccents(raw).replace(/[^a-z0-9 ]/g, " ").trim().replace(/\s+/g, "_");
+  if (ADMIN_TYPE_MAP[norm]) return ADMIN_TYPE_MAP[norm];
+  for (const key of Object.keys(ADMIN_TYPE_MAP)) {
+    if (norm.includes(key)) return ADMIN_TYPE_MAP[key];
+  }
+  return null;
+};
+
 const mapSummaryToParams = (sections, baseParams) => {
   const params = { ...baseParams };
+
+  const adminType = resolveAdminType(sections.tipoDemanda);
+  if (adminType) {
+    params.cond = "ADMIN";
+    params.administrativoTipo = adminType;
+    params.includeCid = false;
+    params.cid = "";
+    params.unsupportedCid = "";
+    params.symptomStates = {};
+    params.alertStates = {};
+    params.semAlergias = true;
+    params.alergiasTexto = "";
+    params.semComorb = true;
+    params.comorbTexto = "";
+    if (sections.historico && !hasNegativeMark(sections.historico)) {
+      params.semComorb = false;
+      params.comorbTexto = sections.historico.replace(/\s+/g, " ").trim();
+    }
+    if (adminType === "renovacao_receita") {
+      params.adminMedicacao = (sections.medicacao || "").trim();
+      params.adminRenova = true;
+    }
+    if (adminType === "solicitacao_exames") {
+      params.adminExames = (sections.examesSolicitados || "").trim();
+    }
+    if (adminType === "encaminhamento_eletivo") {
+      params.adminEspecialidade = (sections.especialidade || "").trim();
+    }
+    params.atestadoDias = "0";
+    return params;
+  }
 
   params.unsupportedCid = "";
   if (sections.cid) {
@@ -1107,6 +1175,17 @@ const TEMPLATES = {
       adminLines.push(`MEDICACAO: ${med}.`);
       adminLines.push(`${status}.`);
     }
+    if (option?.key === "solicitacao_exames") {
+      const exames =
+        p.adminExames?.trim().toUpperCase() || "EXAMES NAO ESPECIFICADOS";
+      adminLines.push(`EXAMES: ${exames}.`);
+    }
+    if (option?.key === "encaminhamento_eletivo") {
+      const esp =
+        p.adminEspecialidade?.trim().toUpperCase() ||
+        "ESPECIALIDADE NAO ESPECIFICADA";
+      adminLines.push(`ESPECIALIDADE: ${esp}.`);
+    }
     const S = adminLines.join(" \n");
     const O = [
       common.telemed,
@@ -1119,6 +1198,22 @@ const TEMPLATES = {
     if (option?.key === "renovacao_receita" && p.adminRenova) {
       planLines.unshift(
         "RENOVO RECEITA PARA 1X MES ATE PROXIMA CONSULTA ELETIVA."
+      );
+    }
+    if (option?.key === "solicitacao_exames") {
+      const exames = p.adminExames?.trim().toUpperCase();
+      planLines.unshift(
+        exames
+          ? `SOLICITO EXAMES: ${exames}.`
+          : "SOLICITO EXAMES ELETIVOS CONFORME ANEXO."
+      );
+    }
+    if (option?.key === "encaminhamento_eletivo") {
+      const esp = p.adminEspecialidade?.trim().toUpperCase();
+      planLines.unshift(
+        esp
+          ? `ENCAMINHO ELETIVAMENTE PARA ${esp}.`
+          : "ENCAMINHO ELETIVAMENTE PARA ESPECIALIDADE CONFORME ANEXO."
       );
     }
     const P = [...planLines, common.atestado, common.observacoes]
@@ -1413,6 +1508,72 @@ const runTests = () => {
       inlineParsed.sintomas?.includes("tosse") &&
       inlineParsed.duracao === "2 dias" &&
       inlineParsed.cid?.includes("J00"),
+    details: "",
+  });
+
+  const renovacaoSummary = JSON.stringify({
+    tipo_demanda: "renovacao_receita",
+    medicacao: "losartana 50mg",
+  });
+  const mappedRenov = mapSummaryToParams(
+    parseAiSummary(renovacaoSummary),
+    buildDefaultParams()
+  );
+  const renovOutput = TEMPLATES[mappedRenov.cond](
+    templateParams(mappedRenov)
+  );
+  results.push({
+    name: "Admin: renovacao de receita via tipo_demanda",
+    passed:
+      mappedRenov.cond === "ADMIN" &&
+      mappedRenov.administrativoTipo === "renovacao_receita" &&
+      mappedRenov.adminMedicacao === "losartana 50mg" &&
+      renovOutput.includes("ADMINISTRATIVO: RENOVACAO DE RECEITA") &&
+      renovOutput.includes("MEDICACAO: LOSARTANA 50MG.") &&
+      renovOutput.includes("RENOVO RECEITA PARA 1X MES"),
+    details: "",
+  });
+
+  const examesSummary = JSON.stringify({
+    tipo_demanda: "solicitacao_exames",
+    exames_solicitados: ["hemograma completo", "TSH"],
+  });
+  const mappedExames = mapSummaryToParams(
+    parseAiSummary(examesSummary),
+    buildDefaultParams()
+  );
+  const examesOutput = TEMPLATES[mappedExames.cond](
+    templateParams(mappedExames)
+  );
+  results.push({
+    name: "Admin: solicitacao de exames via tipo_demanda",
+    passed:
+      mappedExames.cond === "ADMIN" &&
+      mappedExames.administrativoTipo === "solicitacao_exames" &&
+      mappedExames.adminExames?.toLowerCase().includes("hemograma") &&
+      examesOutput.includes("ADMINISTRATIVO: SOLICITACAO DE EXAMES") &&
+      examesOutput.includes("SOLICITO EXAMES: HEMOGRAMA COMPLETO, TSH"),
+    details: "",
+  });
+
+  const encaminhamentoSummary = JSON.stringify({
+    tipo_demanda: "encaminhamento_eletivo",
+    encaminhamento_especialidade: "cardiologia",
+  });
+  const mappedEnc = mapSummaryToParams(
+    parseAiSummary(encaminhamentoSummary),
+    buildDefaultParams()
+  );
+  const encOutput = TEMPLATES[mappedEnc.cond](templateParams(mappedEnc));
+  results.push({
+    name: "Admin: encaminhamento eletivo via tipo_demanda",
+    passed:
+      mappedEnc.cond === "ADMIN" &&
+      mappedEnc.administrativoTipo === "encaminhamento_eletivo" &&
+      mappedEnc.adminEspecialidade === "cardiologia" &&
+      encOutput.includes("ADMINISTRATIVO: ENCAMINHAMENTO ELETIVO") &&
+      encOutput.includes("ESPECIALIDADE: CARDIOLOGIA.") &&
+      encOutput.includes("ENCAMINHO ELETIVAMENTE PARA CARDIOLOGIA"),
     details: "",
   });
 
