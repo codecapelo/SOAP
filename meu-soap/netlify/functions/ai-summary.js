@@ -14,6 +14,7 @@ Receba o motivo da consulta (texto livre do paciente) e o historico medico (opci
   "cid_sugerido": { "code": string, "label": string },
   "conduta_farmacologica": string,
   "conduta_nao_farmacologica": string,
+  "motivo_atestado": string,
   "tipo_demanda": "" | "renovacao_receita" | "solicitacao_exames" | "encaminhamento_eletivo",
   "medicacao": string,
   "exames_solicitados": string[],
@@ -26,6 +27,7 @@ Regras:
 - "sinais_alarme" deve listar apenas sinais de alerta que o paciente mencionou claramente. Vazio [] se nenhum.
 - "cid_sugerido" deve ser o CID-10 mais provavel para o quadro descrito (ex: J00, J06.9, A09, M54.5, G43.9, N30.0). Se for demanda administrativa pura sem queixa clinica, deixe vazio.
 - "inicio_duracao" exemplos: "2 dias", "1 semana", "hoje", "12 horas".
+- "motivo_atestado": justificativa funcional do afastamento, em minusculas, SEM citar diagnostico nem CID (preserva privacidade do paciente). Use uma das opcoes: para quadros contagiosos (respiratorios, gastrointestinais infecciosos, conjuntivite viral) "repouso e prevencao de contaminacao de terceiros"; para quadros musculoesqueleticos (dor lombar, etc.) "repouso e limitacao de esforco fisico"; para os demais "repouso para recuperacao clinica". Deixe vazio se for demanda administrativa ou se claramente nao houver indicacao de atestado.
 - "alergias": se o paciente ou historico mencionar alergia medicamentosa/alimentar, extraia AQUI (ex: "alergia a dipirona"). NAO coloque em historico_medico nem comorbidades. Se o paciente nega alergias, deixe vazio.
 - "historico_medico" e SO para comorbidades cronicas (DM, HAS, asma, etc), NUNCA inclui alergias.
 
