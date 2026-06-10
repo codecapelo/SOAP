@@ -2004,6 +2004,10 @@ export default function SoapGeneratorPT() {
   const [summaryText, setSummaryText] = useState("");
   const [summaryAtestadoDias, setSummaryAtestadoDias] = useState("1");
   const [summaryAtestadoMotivo, setSummaryAtestadoMotivo] = useState("");
+  // Distingue motivo digitado pelo medico de sugestao automatica da IA: so o
+  // valor editado manualmente e reaproveitado entre geracoes; sugestoes sao
+  // recalculadas para o novo CID.
+  const [summaryMotivoEdited, setSummaryMotivoEdited] = useState(false);
   const [summaryEnvioConfirmacao, setSummaryEnvioConfirmacao] = useState(true);
   const [summaryTelemed, setSummaryTelemed] = useState(true);
   const [summaryError, setSummaryError] = useState("");
@@ -2041,6 +2045,11 @@ export default function SoapGeneratorPT() {
       ...prev,
       [key]: !prev[key],
     }));
+  };
+
+  const handleSummaryMotivoChange = (value) => {
+    setSummaryAtestadoMotivo(value);
+    setSummaryMotivoEdited(true);
   };
 
   const handleCidChange = (value) => {
@@ -2212,10 +2221,12 @@ export default function SoapGeneratorPT() {
       const json = JSON.stringify(summary, null, 2);
       setSummaryText(json);
       const sections = parseAiSummary(json);
+      const manualMotivo =
+        summaryMotivoEdited && (summaryAtestadoMotivo || "").trim() !== "";
       const base = buildDefaultParams();
       base.telemed = summaryTelemed;
       base.atestadoDias = summaryAtestadoDias?.toString() || "1";
-      base.atestadoMotivo = summaryAtestadoMotivo || "";
+      base.atestadoMotivo = manualMotivo ? summaryAtestadoMotivo : "";
       base.includeEnvioConfirmacao = summaryEnvioConfirmacao;
       const mapped = mapSummaryToParams(sections, base);
       const template = TEMPLATES[mapped.cond];
@@ -2224,6 +2235,7 @@ export default function SoapGeneratorPT() {
         return;
       }
       setSummaryAtestadoMotivo(mapped.atestadoMotivo || "");
+      setSummaryMotivoEdited(manualMotivo);
       setSummaryPreview(sections);
       setSummaryError("");
       setParams(mapped);
@@ -2289,10 +2301,12 @@ export default function SoapGeneratorPT() {
       setSummaryPreview(null);
       return;
     }
+    const manualMotivo =
+      summaryMotivoEdited && (summaryAtestadoMotivo || "").trim() !== "";
     const base = buildDefaultParams();
     base.telemed = summaryTelemed;
     base.atestadoDias = summaryAtestadoDias?.toString() || "1";
-    base.atestadoMotivo = summaryAtestadoMotivo || "";
+    base.atestadoMotivo = manualMotivo ? summaryAtestadoMotivo : "";
     base.includeEnvioConfirmacao = summaryEnvioConfirmacao;
     const mapped = mapSummaryToParams(sections, base);
     const template = TEMPLATES[mapped.cond];
@@ -2302,6 +2316,7 @@ export default function SoapGeneratorPT() {
       return;
     }
     setSummaryAtestadoMotivo(mapped.atestadoMotivo || "");
+    setSummaryMotivoEdited(manualMotivo);
     setSummaryError("");
     setSummaryPreview(sections);
     setParams(mapped);
@@ -2462,7 +2477,7 @@ export default function SoapGeneratorPT() {
                         placeholder="Motivo do afastamento (opcional)"
                         value={summaryAtestadoMotivo}
                         onChange={(event) =>
-                          setSummaryAtestadoMotivo(event.target.value)
+                          handleSummaryMotivoChange(event.target.value)
                         }
                       />
                     )}
@@ -2576,7 +2591,7 @@ export default function SoapGeneratorPT() {
                       placeholder="Motivo do afastamento (opcional)"
                       value={summaryAtestadoMotivo}
                       onChange={(event) =>
-                        setSummaryAtestadoMotivo(event.target.value)
+                        handleSummaryMotivoChange(event.target.value)
                       }
                     />
                   )}
