@@ -27,6 +27,7 @@ SE o resumo tiver "tipo_demanda" preenchido (demanda administrativa), gere um SO
   - "renovacao_receita": "RENOVO RECEITA PARA 1X MES ATE PROXIMA CONSULTA ELETIVA. ORIENTO FLUXO ELETIVO." + atestado (se aplicavel).
   - "solicitacao_exames": "SOLICITO EXAMES: <LISTA>. ORIENTO FLUXO ELETIVO." + atestado (se aplicavel).
   - "encaminhamento_eletivo": "ENCAMINHO ELETIVAMENTE PARA <ESPECIALIDADE>. ORIENTO FLUXO ELETIVO." + atestado (se aplicavel).
+  - Atestado segue a mesma regra do caso clinico (inclui " MOTIVO DO AFASTAMENTO: ..." se "atestadoMotivo" informado). Se "envioConfirmacao" for true, finalize o bloco P com "DOCUMENTOS GERADOS ENVIADOS AO PACIENTE; CONFIRMACAO DE RECEBIMENTO REGISTRADA NO SISTEMA."
 - NAO mencione sinais de alerta, sintomas ou hipotese clinica nesse fluxo.
 - CID no bloco A apenas se vier explicitamente no resumo.
 
@@ -52,8 +53,9 @@ REGRAS:
    - NUNCA inclua o CID no bloco P (ele esta no bloco A).
    - Use "- SINTOMATICOS CONFORME NECESSIDADE" ou parafrase a conduta_nao_farmacologica do resumo.
    - SEMPRE adicione: "ORIENTADO SOBRE SINAIS DE RISCO (<lista dos sinais>). EM CASO DE QUALQUER UM, PROCURAR PRONTO SOCORRO PRESENCIAL IMEDIATAMENTE."
-   - Adicione "ATESTADO: <N> DIA(S)." conforme parametro.
-   - Se sinal de alarme presente: substitua todo o plan por "ENCAMINHADO AO PRONTO SOCORRO PRESENCIAL PARA MELHOR AVALIACAO DEVIDO AO SINAL DE ALERTA RELATADO." seguido apenas do atestado.
+   - Adicione "ATESTADO: <N> DIA(S)." conforme parametro atestadoDias (omita se for 0). Se "atestadoMotivo" estiver informado, acrescente logo apos: " MOTIVO DO AFASTAMENTO: <MOTIVO EM CAIXA ALTA>.".
+   - Se "envioConfirmacao" for true, adicione como ultima linha do bloco P: "DOCUMENTOS GERADOS ENVIADOS AO PACIENTE; CONFIRMACAO DE RECEBIMENTO REGISTRADA NO SISTEMA."
+   - Se sinal de alarme presente: substitua todo o plan por "ENCAMINHADO AO PRONTO SOCORRO PRESENCIAL PARA MELHOR AVALIACAO DEVIDO AO SINAL DE ALERTA RELATADO." seguido apenas do atestado (com motivo, se houver) e da linha de envio/confirmacao quando "envioConfirmacao" for true.
 
 Retorne APENAS um JSON valido no formato: {"soap": "S\\n...\\n\\nO\\n...\\n\\nA\\n...\\n\\nP\\n..."}.
 `;
@@ -96,6 +98,8 @@ export default async (req) => {
   }
 
   const atestadoDias = (body?.atestadoDias ?? "1").toString();
+  const atestadoMotivo = (body?.atestadoMotivo ?? "").toString().trim();
+  const envioConfirmacao = body?.envioConfirmacao === true;
   const telemed = body?.telemed !== false;
 
   const summaryText =
@@ -103,7 +107,7 @@ export default async (req) => {
 
   const userMessage = [
     `RESUMO ESTRUTURADO DA CONSULTA:\n${summaryText}`,
-    `PARAMETROS:\n- atestadoDias: ${atestadoDias}\n- telemed: ${telemed}`,
+    `PARAMETROS:\n- atestadoDias: ${atestadoDias}\n- atestadoMotivo: ${atestadoMotivo || "(nao informado)"}\n- envioConfirmacao: ${envioConfirmacao}\n- telemed: ${telemed}`,
   ].join("\n\n");
 
   try {

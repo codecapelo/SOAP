@@ -56,6 +56,29 @@ const CID_OPTIONS = {
   ],
 };
 
+// Motivo padrao do atestado por CID-10 (modo parametrico preenche automaticamente
+// ao selecionar a condicao/CID; nos modos IA serve de fallback quando a IA nao sugere).
+const MOTIVO_ATESTADO_BY_CID = {
+  "J06.9": "repouso e prevencao de contaminacao de terceiros",
+  J00: "repouso e prevencao de contaminacao de terceiros",
+  "J02.9": "repouso e prevencao de contaminacao de terceiros",
+  "J03.9": "repouso e prevencao de contaminacao de terceiros",
+  A09: "repouso e prevencao de contaminacao de terceiros",
+  "K52.9": "repouso para recuperacao clinica",
+  "N30.0": "repouso para recuperacao clinica",
+  "N39.0": "repouso para recuperacao clinica",
+  "M54.5": "repouso e limitacao de esforco fisico",
+  "M54.4": "repouso e limitacao de esforco fisico",
+  "G43.0": "repouso para recuperacao clinica",
+  "G43.9": "repouso para recuperacao clinica",
+  "J01.9": "repouso e prevencao de contaminacao de terceiros",
+  "J01.0": "repouso e prevencao de contaminacao de terceiros",
+  "B30.9": "repouso e prevencao de contaminacao de terceiros",
+  "H10.1": "repouso para recuperacao clinica",
+};
+
+const defaultMotivoForCid = (cid) => MOTIVO_ATESTADO_BY_CID[cid] ?? "";
+
 const SYMPTOM_OPTIONS = {
   IVAS: [
     { key: "congestao", label: "Congestao nasal" },
@@ -205,6 +228,8 @@ const buildDefaultParams = () => {
     semComorb: true,
     comorbTexto: "",
     atestadoDias: "1",
+    atestadoMotivo: "",
+    includeEnvioConfirmacao: true,
     cid,
     includeCid: false,
     observacoes: "",
@@ -325,17 +350,24 @@ const formatPregnancy = (p) => {
 
 const formatAtestado = (p) => {
   const dias = numberFrom(p.atestadoDias);
+  const motivo = (p.atestadoMotivo || "").replace(/\s+/g, " ").trim();
+  const motivoSuffix = motivo ? ` MOTIVO DO AFASTAMENTO: ${motivo.toUpperCase()}.` : "";
   if (dias === 1) {
-    return "ATESTADO: 1 DIA.";
+    return `ATESTADO: 1 DIA.${motivoSuffix}`;
   }
   if (dias > 1) {
-    return `ATESTADO: ${dias} DIAS.`;
+    return `ATESTADO: ${dias} DIAS.${motivoSuffix}`;
   }
   if (p.includeDeclaracao) {
     return "DECLARACAO DE COMPARECIMENTO FORNECIDA.";
   }
   return "";
 };
+
+const formatEnvioConfirmacao = (p) =>
+  p.includeEnvioConfirmacao
+    ? "DOCUMENTOS GERADOS ENVIADOS AO PACIENTE; CONFIRMACAO DE RECEBIMENTO REGISTRADA NO SISTEMA."
+    : "";
 
 const formatCid = (p) =>
   p.includeCid && p.cid ? `CID-10: ${p.cid.toUpperCase()}.` : "";
@@ -427,6 +459,7 @@ const baseCommon = (p) => ({
   atestado: formatAtestado(p),
   cid: formatCid(p),
   observacoes: formatObservacoes(p),
+  envio: formatEnvioConfirmacao(p),
   risk: formatRisk(p),
   hasAlert: hasAlertPositive(p),
 });
@@ -506,6 +539,7 @@ const buildPlan = (p, common, extraLines = []) => {
       "ENCAMINHADO AO PRONTO SOCORRO PRESENCIAL PARA MELHOR AVALIACAO DEVIDO AO SINAL DE ALERTA RELATADO.",
       adjustedAtestado,
       common.observacoes,
+      common.envio,
     ]
       .filter(Boolean)
       .join(" \n");
@@ -537,7 +571,7 @@ const buildPlan = (p, common, extraLines = []) => {
     );
   }
 
-  lines.push(adjustedAtestado, common.observacoes);
+  lines.push(adjustedAtestado, common.observacoes, common.envio);
 
   return lines.filter(Boolean).join(" \n");
 };
@@ -630,6 +664,7 @@ const SUMMARY_SECTIONS = [
   { aliases: ["medicacao", "medicamento"], key: "medicacao" },
   { aliases: ["exames solicitados", "exames"], key: "examesSolicitados" },
   { aliases: ["encaminhamento", "especialidade", "encaminhamento especialidade"], key: "especialidade" },
+  { aliases: ["motivo do atestado", "motivo atestado"], key: "motivoAtestado" },
   { aliases: ["informacoes organizadas por ia"], key: "ignore" },
 ];
 
@@ -723,6 +758,7 @@ const JSON_FIELD_MAP = {
     "especialidade",
     "encaminhamento",
   ],
+  motivoAtestado: ["motivo_atestado", "motivo_do_atestado"],
 };
 
 const pickField = (obj, keys) => {
@@ -830,6 +866,12 @@ const extractCid = (text) => {
   return { code, cond: CID_TO_COND[prefix] || null };
 };
 
+const cidLabelOnly = (raw) =>
+  (raw || "")
+    .replace(/^[A-Za-z]\d{2}(?:\.\d+)?\s*[-–:]?\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
 const hasNegativeMark = (text) => {
   if (!text) return true;
   const lower = stripAccents(text);
@@ -906,9 +948,25 @@ const mapSummaryToParams = (sections, baseParams) => {
         if (cidInfo.code) params.cid = cidInfo.code;
         params.includeCid = true;
       } else {
+        // CID sem template dedicado: gera no molde generico, incluindo o CID da IA.
         params.unsupportedCid = cidInfo.code || "";
+        params.cond = "GENERICO";
+        params.cid = cidInfo.code || "";
+        params.includeCid = !!cidInfo.code;
       }
     }
+  }
+
+  if (params.cond === "GENERICO") {
+    params.genericSintomas =
+      (sections.sintomas || sections.queixa || "").replace(/\s+/g, " ").trim();
+    params.genericDiagnosis =
+      (sections.resumoClinico ||
+        cidLabelOnly(sections.cid) ||
+        sections.queixa ||
+        "")
+        .replace(/\s+/g, " ")
+        .trim();
   }
 
   params.symptomStates = {};
@@ -1021,6 +1079,19 @@ const mapSummaryToParams = (sections, baseParams) => {
   params.observacoes = "";
   params.includeAntibiotico = false;
   params.antibioticoTexto = "";
+
+  // Sugestao de motivo do atestado: respeita o que o usuario ja digitou (base nao vazia);
+  // senao usa o motivo sugerido pela IA, depois o padrao do CID, e por fim o diagnostico generico.
+  if (!params.atestadoMotivo || !params.atestadoMotivo.trim()) {
+    const aiMotivo = (sections.motivoAtestado || "").replace(/\s+/g, " ").trim();
+    if (aiMotivo) {
+      params.atestadoMotivo = aiMotivo;
+    } else if (params.cond === "GENERICO") {
+      params.atestadoMotivo = "repouso para recuperacao clinica";
+    } else {
+      params.atestadoMotivo = defaultMotivoForCid(params.cid);
+    }
+  }
 
   if (params.atestadoDias === undefined || params.atestadoDias === null || params.atestadoDias === "") {
     params.atestadoDias = "1";
@@ -1234,9 +1305,28 @@ const TEMPLATES = {
           : "ENCAMINHO ELETIVAMENTE PARA ESPECIALIDADE CONFORME ANEXO."
       );
     }
-    const P = [...planLines, common.atestado, common.observacoes]
+    const P = [...planLines, common.atestado, common.observacoes, common.envio]
       .filter(Boolean)
       .join(" \n");
+    return composeSoap({ S, O, A, P });
+  },
+  GENERICO: (p) => {
+    const common = baseCommon(p);
+    const detailLines = [];
+    const sintomas = (p.genericSintomas || "").replace(/\s+/g, " ").trim();
+    if (sintomas) {
+      detailLines.push(`RELATA ${sintomas.toUpperCase()}.`);
+    }
+    const S = buildSubjective(p, common, detailLines);
+    const O = buildObjective(p, common);
+    const diagnosisRaw = (p.genericDiagnosis || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const diagnosis = (diagnosisRaw || "QUADRO CLINICO CONFORME AVALIACAO MEDICA")
+      .toUpperCase();
+    const baseA = /[.!?]$/.test(diagnosis) ? diagnosis : `${diagnosis}.`;
+    const A = appendAlertToAssessment(baseA, common);
+    const P = buildPlan(p, common, []);
     return composeSoap({ S, O, A, P });
   },
 };
@@ -1504,11 +1594,193 @@ const runTests = () => {
     parseAiSummary(unsupportedCidJson),
     buildDefaultParams()
   );
+  const genericOutput = TEMPLATES[mappedUnsupported.cond](
+    templateParams(mappedUnsupported)
+  );
   results.push({
-    name: "P1: CID nao mapeado nao cai em IVAS - sinaliza unsupportedCid",
+    name: "CID nao mapeado gera SOAP generico no molde, com CID da IA",
     passed:
       mappedUnsupported.unsupportedCid === "R51.9" &&
-      mappedUnsupported.cond === "IVAS",
+      mappedUnsupported.cond === "GENERICO" &&
+      mappedUnsupported.cid === "R51.9" &&
+      mappedUnsupported.includeCid === true &&
+      genericOutput.startsWith("S\n") &&
+      genericOutput.includes("DOR DE CABECA") &&
+      genericOutput.includes("CEFALEIA, NE") &&
+      genericOutput.includes("CID-10: R51.9.") &&
+      genericOutput.includes("ATENDIMENTO VIA TELEMEDICINA"),
+    details: "",
+  });
+
+  const genericAlert = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "R51.9", label: "Cefaleia, NE" },
+        sintomas: ["dor de cabeca"],
+        sinais_alarme: ["rigidez de nuca"],
+      })
+    ),
+    buildDefaultParams()
+  );
+  const genericAlertOutput = TEMPLATES[genericAlert.cond](
+    templateParams(genericAlert)
+  );
+  results.push({
+    name: "Generico com sinal de alarme encaminha ao PS e mantem CID em A",
+    passed:
+      genericAlert.cond === "GENERICO" &&
+      genericAlertOutput.includes("CRITERIOS DE GRAVIDADE PRESENTES") &&
+      genericAlertOutput.includes("ENCAMINHADO AO PRONTO SOCORRO") &&
+      genericAlertOutput.includes("CID-10: R51.9."),
+    details: "",
+  });
+
+  const atestadoComMotivo = TEMPLATES.IVAS(
+    templateParams({
+      atestadoDias: "3",
+      atestadoMotivo: "repouso por quadro gripal",
+    })
+  );
+  results.push({
+    name: "Atestado inclui motivo do afastamento quando informado",
+    passed:
+      atestadoComMotivo.includes(
+        "ATESTADO: 3 DIAS. MOTIVO DO AFASTAMENTO: REPOUSO POR QUADRO GRIPAL."
+      ),
+    details: "",
+  });
+
+  const semMotivo = TEMPLATES.IVAS(templateParams({ atestadoDias: "1" }));
+  results.push({
+    name: "Atestado sem motivo mantem formato original",
+    passed:
+      semMotivo.includes("ATESTADO: 1 DIA.") &&
+      !semMotivo.includes("MOTIVO DO AFASTAMENTO"),
+    details: "",
+  });
+
+  const envioPadrao = TEMPLATES.IVAS(templateParams({}));
+  results.push({
+    name: "Envio de documentos registrado no bloco P por padrao",
+    passed:
+      envioPadrao.includes(
+        "DOCUMENTOS GERADOS ENVIADOS AO PACIENTE; CONFIRMACAO DE RECEBIMENTO REGISTRADA NO SISTEMA."
+      ),
+    details: "",
+  });
+
+  const envioDesmarcado = TEMPLATES.IVAS(
+    templateParams({ includeEnvioConfirmacao: false })
+  );
+  results.push({
+    name: "Envio omitido quando desmarcado",
+    passed: !envioDesmarcado.includes(
+      "DOCUMENTOS GERADOS ENVIADOS AO PACIENTE"
+    ),
+    details: "",
+  });
+
+  const envioComAlerta = TEMPLATES.IVAS(
+    templateParams({
+      includeEnvioConfirmacao: true,
+      alertStates: {
+        ...buildAlertState("IVAS"),
+        dispneia_intensa: "present",
+      },
+    })
+  );
+  results.push({
+    name: "Envio aparece mesmo na conduta com encaminhamento ao PS",
+    passed:
+      envioComAlerta.includes("ENCAMINHADO AO PRONTO SOCORRO") &&
+      envioComAlerta.includes(
+        "DOCUMENTOS GERADOS ENVIADOS AO PACIENTE; CONFIRMACAO DE RECEBIMENTO REGISTRADA NO SISTEMA."
+      ),
+    details: "",
+  });
+
+  results.push({
+    name: "Motivo padrao por CID disponivel (parametrico)",
+    passed:
+      defaultMotivoForCid("A09") ===
+        "repouso e prevencao de contaminacao de terceiros" &&
+      defaultMotivoForCid("M54.5") ===
+        "repouso e limitacao de esforco fisico" &&
+      defaultMotivoForCid("N30.0") === "repouso para recuperacao clinica" &&
+      defaultMotivoForCid("G43.9") === "repouso para recuperacao clinica" &&
+      defaultMotivoForCid("ZZZ") === "",
+    details: "",
+  });
+
+  const iaSugereMotivo = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "A09", label: "GECA" },
+        sintomas: ["diarreia"],
+      })
+    ),
+    buildDefaultParams()
+  );
+  const iaSugereOutput = TEMPLATES[iaSugereMotivo.cond](
+    templateParams(iaSugereMotivo)
+  );
+  results.push({
+    name: "IA sugere motivo do atestado pelo CID quando vazio",
+    passed:
+      iaSugereMotivo.atestadoMotivo ===
+        "repouso e prevencao de contaminacao de terceiros" &&
+      iaSugereOutput.includes(
+        "MOTIVO DO AFASTAMENTO: REPOUSO E PREVENCAO DE CONTAMINACAO DE TERCEIROS."
+      ),
+    details: "",
+  });
+
+  const iaMotivoExplicito = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "A09", label: "GECA" },
+        sintomas: ["diarreia"],
+        motivo_atestado: "repouso por desidratacao leve",
+      })
+    ),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "IA usa motivo_atestado explicito do resumo",
+    passed: iaMotivoExplicito.atestadoMotivo === "repouso por desidratacao leve",
+    details: "",
+  });
+
+  const iaMotivoManual = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "A09", label: "GECA" },
+        sintomas: ["diarreia"],
+        motivo_atestado: "repouso por desidratacao leve",
+      })
+    ),
+    { ...buildDefaultParams(), atestadoMotivo: "motivo digitado pelo medico" }
+  );
+  results.push({
+    name: "Motivo digitado pelo medico prevalece sobre sugestao da IA",
+    passed: iaMotivoManual.atestadoMotivo === "motivo digitado pelo medico",
+    details: "",
+  });
+
+  const genericMotivo = mapSummaryToParams(
+    parseAiSummary(
+      JSON.stringify({
+        cid_sugerido: { code: "R51.9", label: "Cefaleia, NE" },
+        sintomas: ["dor de cabeca"],
+      })
+    ),
+    buildDefaultParams()
+  );
+  results.push({
+    name: "Generico sugere motivo funcional de repouso",
+    passed:
+      genericMotivo.cond === "GENERICO" &&
+      genericMotivo.atestadoMotivo === "repouso para recuperacao clinica",
     details: "",
   });
 
@@ -1720,13 +1992,23 @@ const runTests = () => {
 };
 
 export default function SoapGeneratorPT() {
-  const [params, setParams] = useState(() => buildDefaultParams());
+  const [params, setParams] = useState(() => {
+    const base = buildDefaultParams();
+    base.atestadoMotivo = defaultMotivoForCid(base.cid);
+    return base;
+  });
   const [output, setOutput] = useState("");
   const [tests, setTests] = useState([]);
   const [copyState, setCopyState] = useState("copiar");
   const [mode, setMode] = useState("parametric");
   const [summaryText, setSummaryText] = useState("");
   const [summaryAtestadoDias, setSummaryAtestadoDias] = useState("1");
+  const [summaryAtestadoMotivo, setSummaryAtestadoMotivo] = useState("");
+  // Distingue motivo digitado pelo medico de sugestao automatica da IA: so o
+  // valor editado manualmente e reaproveitado entre geracoes; sugestoes sao
+  // recalculadas para o novo CID.
+  const [summaryMotivoEdited, setSummaryMotivoEdited] = useState(false);
+  const [summaryEnvioConfirmacao, setSummaryEnvioConfirmacao] = useState(true);
   const [summaryTelemed, setSummaryTelemed] = useState(true);
   const [summaryError, setSummaryError] = useState("");
   const [summaryPreview, setSummaryPreview] = useState(null);
@@ -1765,6 +2047,25 @@ export default function SoapGeneratorPT() {
     }));
   };
 
+  const handleSummaryMotivoChange = (value) => {
+    setSummaryAtestadoMotivo(value);
+    setSummaryMotivoEdited(true);
+  };
+
+  const handleCidChange = (value) => {
+    setParams((prev) => {
+      const motivoIsAuto =
+        !prev.atestadoMotivo || prev.atestadoMotivo === defaultMotivoForCid(prev.cid);
+      return {
+        ...prev,
+        cid: value,
+        atestadoMotivo: motivoIsAuto
+          ? defaultMotivoForCid(value)
+          : prev.atestadoMotivo,
+      };
+    });
+  };
+
   const handleModeChange = (next) => {
     if (next !== "summary") {
       setParams((prev) => ({ ...prev, extraAlertText: "" }));
@@ -1775,6 +2076,11 @@ export default function SoapGeneratorPT() {
   const handleCondChange = (value) => {
     const newCid = CID_OPTIONS[value]?.[0]?.code ?? "";
     setParams((prev) => {
+      const motivoIsAuto =
+        !prev.atestadoMotivo || prev.atestadoMotivo === defaultMotivoForCid(prev.cid);
+      const nextAtestadoMotivo = motivoIsAuto
+        ? defaultMotivoForCid(newCid)
+        : prev.atestadoMotivo;
       const wasConj = prev.cond === "CONJUNTIVITE";
       const isConj = value === "CONJUNTIVITE";
       const isEnxaqueca = value === "ENXAQUECA";
@@ -1815,6 +2121,7 @@ export default function SoapGeneratorPT() {
           ? prev.enxaquecaLateralidade || "unilateral"
           : prev.enxaquecaLateralidade,
         atestadoDias: nextAtestadoDias,
+        atestadoMotivo: nextAtestadoMotivo,
       };
     });
   };
@@ -1914,21 +2221,21 @@ export default function SoapGeneratorPT() {
       const json = JSON.stringify(summary, null, 2);
       setSummaryText(json);
       const sections = parseAiSummary(json);
+      const manualMotivo =
+        summaryMotivoEdited && (summaryAtestadoMotivo || "").trim() !== "";
       const base = buildDefaultParams();
       base.telemed = summaryTelemed;
       base.atestadoDias = summaryAtestadoDias?.toString() || "1";
+      base.atestadoMotivo = manualMotivo ? summaryAtestadoMotivo : "";
+      base.includeEnvioConfirmacao = summaryEnvioConfirmacao;
       const mapped = mapSummaryToParams(sections, base);
-      if (mapped.unsupportedCid) {
-        setAiError(
-          `CID ${mapped.unsupportedCid} retornado pela IA nao tem template SOAP suportado. Use o modo Parametrico para escolher a condicao manualmente.`
-        );
-        return;
-      }
       const template = TEMPLATES[mapped.cond];
       if (!template) {
         setAiError("Condicao identificada nao suportada.");
         return;
       }
+      setSummaryAtestadoMotivo(mapped.atestadoMotivo || "");
+      setSummaryMotivoEdited(manualMotivo);
       setSummaryPreview(sections);
       setSummaryError("");
       setParams(mapped);
@@ -1956,6 +2263,8 @@ export default function SoapGeneratorPT() {
         body: JSON.stringify({
           summary: summaryText,
           atestadoDias: summaryAtestadoDias || "1",
+          atestadoMotivo: summaryAtestadoMotivo || "",
+          envioConfirmacao: summaryEnvioConfirmacao,
           telemed: summaryTelemed,
         }),
       });
@@ -1992,23 +2301,22 @@ export default function SoapGeneratorPT() {
       setSummaryPreview(null);
       return;
     }
+    const manualMotivo =
+      summaryMotivoEdited && (summaryAtestadoMotivo || "").trim() !== "";
     const base = buildDefaultParams();
     base.telemed = summaryTelemed;
     base.atestadoDias = summaryAtestadoDias?.toString() || "1";
+    base.atestadoMotivo = manualMotivo ? summaryAtestadoMotivo : "";
+    base.includeEnvioConfirmacao = summaryEnvioConfirmacao;
     const mapped = mapSummaryToParams(sections, base);
-    if (mapped.unsupportedCid) {
-      setSummaryError(
-        `CID ${mapped.unsupportedCid} nao tem template SOAP suportado neste app. Use o modo Parametrico para escolher a condicao manualmente.`
-      );
-      setSummaryPreview(sections);
-      return;
-    }
     const template = TEMPLATES[mapped.cond];
     if (!template) {
       setSummaryError("Condicao identificada nao suportada.");
       setSummaryPreview(null);
       return;
     }
+    setSummaryAtestadoMotivo(mapped.atestadoMotivo || "");
+    setSummaryMotivoEdited(manualMotivo);
     setSummaryError("");
     setSummaryPreview(sections);
     setParams(mapped);
@@ -2163,6 +2471,16 @@ export default function SoapGeneratorPT() {
                       value={summaryAtestadoDias}
                       onChange={(event) => setSummaryAtestadoDias(event.target.value)}
                     />
+                    {numberFrom(summaryAtestadoDias) > 0 && (
+                      <input
+                        type="text"
+                        placeholder="Motivo do afastamento (opcional)"
+                        value={summaryAtestadoMotivo}
+                        onChange={(event) =>
+                          handleSummaryMotivoChange(event.target.value)
+                        }
+                      />
+                    )}
                   </div>
 
                   <div className="field">
@@ -2175,6 +2493,19 @@ export default function SoapGeneratorPT() {
                         onChange={() => setSummaryTelemed((prev) => !prev)}
                       />
                       <label htmlFor="aiTelemed">Via telemedicina</label>
+                    </div>
+                    <div className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        id="aiEnvioConfirmacao"
+                        checked={summaryEnvioConfirmacao}
+                        onChange={() =>
+                          setSummaryEnvioConfirmacao((prev) => !prev)
+                        }
+                      />
+                      <label htmlFor="aiEnvioConfirmacao">
+                        Registrar envio e confirmacao de recebimento
+                      </label>
                     </div>
                   </div>
 
@@ -2254,6 +2585,16 @@ export default function SoapGeneratorPT() {
                     value={summaryAtestadoDias}
                     onChange={(event) => setSummaryAtestadoDias(event.target.value)}
                   />
+                  {numberFrom(summaryAtestadoDias) > 0 && (
+                    <input
+                      type="text"
+                      placeholder="Motivo do afastamento (opcional)"
+                      value={summaryAtestadoMotivo}
+                      onChange={(event) =>
+                        handleSummaryMotivoChange(event.target.value)
+                      }
+                    />
+                  )}
                 </div>
 
                 <div className="field">
@@ -2266,6 +2607,19 @@ export default function SoapGeneratorPT() {
                       onChange={() => setSummaryTelemed((prev) => !prev)}
                     />
                     <label htmlFor="summaryTelemed">Via telemedicina</label>
+                  </div>
+                  <div className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      id="summaryEnvioConfirmacao"
+                      checked={summaryEnvioConfirmacao}
+                      onChange={() =>
+                        setSummaryEnvioConfirmacao((prev) => !prev)
+                      }
+                    />
+                    <label htmlFor="summaryEnvioConfirmacao">
+                      Registrar envio e confirmacao de recebimento
+                    </label>
                   </div>
                 </div>
 
@@ -2559,6 +2913,16 @@ export default function SoapGeneratorPT() {
                     handleChange("atestadoDias", event.target.value)
                   }
                 />
+                {numberFrom(params.atestadoDias) > 0 && (
+                  <input
+                    type="text"
+                    placeholder="Motivo do afastamento (ex.: repouso e prevencao de contaminacao de terceiros)"
+                    value={params.atestadoMotivo}
+                    onChange={(event) =>
+                      handleChange("atestadoMotivo", event.target.value)
+                    }
+                  />
+                )}
                 <div className="checkbox-row">
                   <input
                     type="checkbox"
@@ -2573,10 +2937,25 @@ export default function SoapGeneratorPT() {
               </div>
 
               <div className="field">
+                <label>Envio de documentos</label>
+                <div className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    id="includeEnvioConfirmacao"
+                    checked={params.includeEnvioConfirmacao}
+                    onChange={() => handleCheckbox("includeEnvioConfirmacao")}
+                  />
+                  <label htmlFor="includeEnvioConfirmacao">
+                    Registrar envio ao paciente e confirmacao de recebimento
+                  </label>
+                </div>
+              </div>
+
+              <div className="field">
                 <label>CID-10 sugerido</label>
                 <select
                   value={params.cid}
-                  onChange={(event) => handleChange("cid", event.target.value)}
+                  onChange={(event) => handleCidChange(event.target.value)}
                 >
                   <option value="">Selecione</option>
                   {cidOptions.map((item) => (
